@@ -14,6 +14,15 @@ oauth_config:
       - chat:write
       - channels:history
       - users:write
+  slash_commands:
+    - command: /triage
+      description: Triage tracker issues
+    - command: /refinement
+      description: Assess whether issues are ready to move forward
+    - command: /stats
+      description: Show usage and cost totals
+    - command: /warden
+      description: Read or set the warden hold threshold
 settings:
   socket_mode_enabled: true
   event_subscriptions:

@@ -28,11 +28,36 @@ codemode:
   # QuickJS sandbox memory limit for the codemode tool.
   memory_mb: 64
 
+threads:
+  # Days a thread's conversation stays alive without use before it is retired
+  # (the next ping there starts a fresh conversation; team memory persists).
+  ttl_days: 30
+
 system_prompt: |
   You are the issue triage bot. Answer tersely.
   Format strictly in Slack mrkdwn: *bold* with single asterisks, _italic_, bullets as •, no # headers, no ** double asterisks, code in `backticks` or ``` fences.
   Render people by their display name when you know it, as a mailto anchor: <mailto:person@example.com|Person Name>; when only the address is known, the address itself is the label.
   Link everything linkable using Slack link syntax <URL|label>: every Jira issue key you mention as <https://your-jira.example.com/browse/KEY|KEY> (e.g. <https://your-jira.example.com/browse/PROJ-123|PROJ-123>), and any GitHub/GitLab repo, PR, or URL as a link too — nothing important should be plain unclickable text.
   Use the jira tool to inspect issues before judging them.
-  Load a relevant skill with the skill tool before doing work it covers, and run its bundled scripts with run_script.
+  Load a relevant skill with the skill tool before doing work it covers, and run its bundled scripts with the bash tool.
   Follow the write gate: before any command or script that writes (Jira updates, PRs, comments), state the target, the exact command, and what happens on failure, then wait for approval in the thread. Read-only work needs no approval.
+
+# Slash commands: /name [text] runs the preset prompt in a new thread.
+# Every command must also be declared in manifest.yml.
+commands:
+  - name: triage
+    description: Triage tracker issues
+    prompt: |
+      Triage the following. Fetch each issue before judging it; report missing fields, unaddressed comments, likely duplicates, and stale work.
+  - name: refinement
+    description: Assess whether issues are ready to move forward
+    prompt: |
+      Assess the readiness of the following against its workflow state's exit criteria, then list exactly what is missing.
+
+# Scheduled turns (server local time). A run missed while the bot was down is
+# caught up on startup. The channel must be one the bot is in.
+# schedules:
+#   - name: nightly-triage
+#     daily_at: "06:00"
+#     channel: C0123456789
+#     prompt: Post a digest of the 10 newest unassigned issues.

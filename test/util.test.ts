@@ -94,7 +94,9 @@ describe("warden helpers", () => {
     expect(
       obviouslyReadOnly("jira", { args: ["jira", "workitem", "comment", "PROJ-1"] }),
     ).toBeFalsy();
-    expect(obviouslyReadOnly("run_script", { skill: "s", path: "list.py" })).toBeFalsy();
+    // bash can do anything: never ask-gated, always classified.
+    expect(obviouslyReadOnly("bash", { command: "ls" })).toBeFalsy();
+    expect(offlineWriteShaped("bash", { command: "ls" })).toBeTruthy();
     // Flag values are not actions: --fields comment and JQL linkedIssues() must
     // not read as writes (both were held as false positives before).
     expect(
@@ -135,5 +137,41 @@ describe("linkifyEmails", () => {
 
   it("leaves existing links alone", () => {
     expect(linkifyEmails("<mailto:x@y.com|Paul>")).toBe("<mailto:x@y.com|Paul>");
+  });
+});
+
+describe("memory ranking", () => {
+  it("ranks key matches above substring matches, newest-used first", async () => {
+    const { rankMemories } = await import("../src/extensions/memory.ts");
+    const items = [
+      { at: 1, lastUsed: 1, keys: ["PROJ-1"], text: "epic decision about navigation" },
+      { at: 2, lastUsed: 5, keys: [], text: "navigation note" },
+      { at: 3, lastUsed: 9, keys: [], text: "unrelated but recent" },
+    ];
+    // Key match wins despite lower lastUsed; then lastUsed descending.
+    const ranked = rankMemories(items, "navigation", ["PROJ-1"]);
+    expect(ranked.map((i) => i.text)).toEqual([
+      "epic decision about navigation",
+      "navigation note",
+    ]);
+  });
+
+  it("extracts issue keys from text", async () => {
+    const { extractKeys } = await import("../src/extensions/memory.ts");
+    expect(extractKeys("Decided in PROJ-12 and PROJ-12 again, plus ABC-7")).toEqual([
+      "PROJ-12",
+      "ABC-7",
+    ]);
+  });
+});
+
+describe("thread retirement", () => {
+  it("flags threads idle beyond the TTL", async () => {
+    const { staleThreadKeys, tsToMs } = await import("../src/harness.ts");
+    const now = tsToMs("3000000.000000");
+    const ttl = 30 * 24 * 60 * 60_000;
+    const fresh = `${(now - 1000) / 1000}`;
+    const stale = `${(now - ttl - 5000) / 1000}`;
+    expect(staleThreadKeys({ fresh, stale, bad: "0" }, now, ttl)).toEqual(["stale"]);
   });
 });

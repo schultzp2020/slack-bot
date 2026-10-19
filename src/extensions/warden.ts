@@ -23,6 +23,19 @@ export function approvalRegex(): RegExp {
   return /\b(approve|approved|approval|yes|do it|go ahead|ship it|lgtm)\b/i;
 }
 
+// Mutable so /warden can adjust the threshold live, without a restart;
+// WARDEN_HOLD_SCORE (config.yaml or env) is the initial value.
+let holdScore = WARDEN_HOLD_SCORE;
+
+/** Risk score at or above which a tool call is held for in-thread approval. */
+export function getWardenHoldScore(): number {
+  return holdScore;
+}
+
+export function setWardenHoldScore(value: number): void {
+  holdScore = value;
+}
+
 const classifierModel: ClassifierModel<"llama-cpp-classify"> = {
   type: "classifier",
   id: WARDEN_MODEL,
@@ -83,7 +96,7 @@ async function riskScore(tool: string, args: JsonObject): Promise<number | undef
         context:
           "A Slack agent for issue trackers and forges. The `command` field is the CLI verb path; " +
           "flags in `arguments` (such as --jql, --fields) select what to read. " +
-          "Tools: jira (Atlassian CLI), run_script (skill-bundled scripts).",
+          "Tools: jira (Atlassian CLI), bash/read/write/edit (coding tools), skill, codemode.",
       },
       questions: {
         risk: {
@@ -159,14 +172,14 @@ const wardenExtension: Extension = {
         const hold =
           score === undefined
             ? offlineWriteShaped(call.name, args) // classifier down: fail closed (unknown tools hold)
-            : score >= WARDEN_HOLD_SCORE;
+            : score >= getWardenHoldScore();
         if (!hold) {
           return undefined;
         }
         const why =
           score === undefined
             ? "the approval classifier is unreachable and this call looks like a write"
-            : `the approval classifier scored it ${score.toFixed(2)} (hold threshold ${WARDEN_HOLD_SCORE})`;
+            : `the approval classifier scored it ${score.toFixed(2)} (hold threshold ${getWardenHoldScore()})`;
         return {
           block:
             `Warden hold: ${why}. Follow the write gate: state the target, the exact command, ` +

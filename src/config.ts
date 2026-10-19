@@ -21,7 +21,17 @@ interface ConfigFile {
     approval_window_ms: number;
   };
   codemode: { memory_mb: number };
+  threads: { ttl_days: number };
+  commands?: { name: string; description: string; prompt?: string }[];
+  schedules?: { name: string; daily_at: string; channel: string; prompt: string }[];
   system_prompt: string;
+}
+
+export interface ScheduleConfig {
+  name: string;
+  daily_at: string;
+  channel: string;
+  prompt: string;
 }
 
 const file = parse(readFileSync("config.yaml", "utf8")) as ConfigFile;
@@ -52,9 +62,21 @@ export const WARDEN_APPROVAL_WINDOW_MS = file.warden.approval_window_ms;
 
 // --- Codemode ----------------------------------------------------------------
 
+/** How long a thread's conversation stays alive without use before retirement. */
+export const THREAD_TTL_MS = file.threads.ttl_days * 24 * 60 * 60_000;
+
 /** QuickJS sandbox memory limit for the codemode tool. */
 export const CODEMODE_MEMORY_LIMIT_BYTES =
   Number(process.env.CODEMODE_MEMORY_MB ?? file.codemode.memory_mb) * 1024 * 1024;
+
+// --- Commands and schedules ----------------------------------------------------
+
+/** Slash commands: /name [text] runs the preset prompt. Also declare each in manifest.yml. */
+export const COMMANDS: { name: string; description: string; prompt?: string }[] =
+  file.commands ?? [];
+
+/** Scheduled turns; a run missed while the bot was down is caught up on startup. */
+export const SCHEDULES: ScheduleConfig[] = file.schedules ?? [];
 
 // --- Prompt ----------------------------------------------------------------
 

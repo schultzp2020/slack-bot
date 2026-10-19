@@ -6,6 +6,7 @@ import { createModels, createProvider } from "@earendil-works/pi-ai/models";
 import { readdirSync } from "node:fs";
 import {
   createRegistry,
+  defineDoc,
   defineDocFamily,
   type Conversation,
   type ConversationId,
@@ -100,6 +101,106 @@ const Threads = defineDocFamily<
   initial: (seed) => ({ conversationId: 0, channel: seed.channel, lastSeenTs: "0" }),
 });
 
+// Per-channel watermark of the newest message this bot has processed; the
+// startup recovery sweep resumes from it, so mentions that arrive while the
+// bot is down are answered after restart.
+const Channels = defineDoc<{ seen: Record<string, string> }>({
+  kind: "app.channels",
+  version: 1,
+  scope: "session",
+  initial: () => ({ seen: {} }),
+});
+
+// chisle: session-doc tokens don't infer under tsgolint here; structural aliases, as in memory.ts.
+interface ChannelsWriter {
+  doc: (token: typeof Channels) => Promise<{ seen: Record<string, string> }>;
+}
+interface ChannelsReader {
+  snapshot: (
+    token: typeof Channels,
+    ctx: typeof context,
+  ) => Promise<{ seen: Record<string, string> } | undefined>;
+}
+
+export async function markChannelSeen(
+  harness: Harness,
+  channel: string,
+  ts: string,
+): Promise<void> {
+  await harness.commit(async (tx) => {
+    const doc = await (tx as unknown as ChannelsWriter).doc(Channels);
+    doc.seen[channel] = ts;
+  }, context);
+}
+
+export async function channelWatermarks(harness: Harness): Promise<Record<string, string>> {
+  const reader = harness as unknown as ChannelsReader;
+  return (await reader.snapshot(Channels, context))?.seen ?? {};
+}
+
+// Index of thread keys by last use, so stale threads can be enumerated and
+// retired: conversations are a cache, team memory is the truth layer. Retiring
+// the mapping means the next ping starts a fresh conversation; the old one
+// stays in SQLite as an audit trail.
+const ThreadIndex = defineDoc<{ used: Record<string, string> }>({
+  kind: "app.thread_index",
+  version: 1,
+  scope: "session",
+  initial: () => ({ used: {} }),
+});
+
+// chisle: session-doc tokens don't infer under tsgolint here; structural aliases, as in memory.ts.
+interface ThreadIndexWriter {
+  doc: (token: typeof ThreadIndex) => Promise<{ used: Record<string, string> }>;
+}
+interface ThreadIndexRetirer {
+  retireDoc: (token: unknown, key: string) => Promise<void>;
+}
+interface ThreadIndexReader {
+  snapshot: (
+    token: typeof ThreadIndex,
+    ctx: typeof context,
+  ) => Promise<{ used: Record<string, string> } | undefined>;
+}
+
+/** A Slack message ts ("seconds.microseconds") as epoch milliseconds. */
+export function tsToMs(ts: string): number {
+  return Math.floor(Number(ts) * 1000);
+}
+
+/** Thread keys not used within the TTL. */
+export function staleThreadKeys(
+  used: Record<string, string>,
+  nowMs: number,
+  ttlMs: number,
+): string[] {
+  return Object.entries(used)
+    .filter(([, ts]) => {
+      const ms = tsToMs(ts);
+      return Number.isFinite(ms) && ms > 0 && nowMs - ms > ttlMs;
+    })
+    .map(([key]) => key);
+}
+
+/** Retire thread mappings idle beyond the TTL; returns how many were retired. */
+export async function retireStaleThreads(harness: Harness, ttlMs: number): Promise<number> {
+  const reader = harness as unknown as ThreadIndexReader;
+  const used = (await reader.snapshot(ThreadIndex, context))?.used ?? {};
+  const stale = staleThreadKeys(used, Date.now(), ttlMs);
+  if (stale.length === 0) {
+    return 0;
+  }
+  await harness.commit(async (tx) => {
+    const index = await (tx as unknown as ThreadIndexWriter).doc(ThreadIndex);
+    const retirer = tx as unknown as ThreadIndexRetirer;
+    for (const key of stale) {
+      await retirer.retireDoc(Threads, key);
+      delete index.used[key];
+    }
+  }, context);
+  return stale.length;
+}
+
 export async function threadLastSeenTs(
   harness: Harness,
   channel: string,
@@ -116,8 +217,10 @@ export async function markThreadSeen(
   ts: string,
 ): Promise<void> {
   await harness.commit(async (tx) => {
-    const thread = await tx.doc(Threads, threadKey(channel, threadTs), { channel });
+    const key = threadKey(channel, threadTs);
+    const thread = await tx.doc(Threads, key, { channel });
     thread.lastSeenTs = ts;
+    (await (tx as unknown as ThreadIndexWriter).doc(ThreadIndex)).used[key] = ts;
   }, context);
 }
 

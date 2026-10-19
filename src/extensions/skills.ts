@@ -1,16 +1,13 @@
 // Agent Skills support (agentskills.io spec, as Pi implements it): SKILL.md
 // directories are discovered in ./.agents/skills and ~/.agents/skills, advertised to
 // the model by name + description in the system prompt, and loaded in full
-// only when the task calls for it. Scripts bundled with a skill run through
-// run_script: scoped to the skill's directory, no shell, interpreter by
-// extension. Progressive disclosure, no extra deps.
-import { spawn } from "node:child_process";
+// only when the task calls for it. Skill scripts run with the bash tool; the
+// skill tool reads SKILL.md and supporting files. No extra deps.
 import { readFileSync, readdirSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { Type } from "@earendil-works/pi-ai";
-import { offlineFloors } from "./warden.ts";
 import {
   defineExtension,
   defineTool,
@@ -80,40 +77,6 @@ export function loadSkills(): Skill[] {
   return [...byName.values()];
 }
 
-/** Script execution cap; a stuck script must not pin the conversation. */
-const SCRIPT_TIMEOUT_MS = 120_000;
-
-/** Run one script with its interpreter, capturing output; kills it after the timeout. */
-function runScriptProcess(
-  interpreter: string,
-  script: string,
-  args: readonly string[],
-  cwd: string,
-): Promise<string> {
-  return new Promise((resolve) => {
-    const proc = spawn(interpreter, [script, ...args], { cwd });
-    let output = "";
-    proc.stdout.on("data", (chunk: string) => {
-      output += chunk;
-    });
-    proc.stderr.on("data", (chunk: string) => {
-      output += chunk;
-    });
-    const timer = setTimeout(() => {
-      proc.kill();
-      resolve(`timed out after ${SCRIPT_TIMEOUT_MS}ms:\n${output}`);
-    }, SCRIPT_TIMEOUT_MS);
-    proc.on("error", (error) => {
-      clearTimeout(timer);
-      resolve(`${interpreter} failed to start: ${error.message}`);
-    });
-    proc.on("close", (code) => {
-      clearTimeout(timer);
-      resolve(code === 0 ? output : `exit ${code}:\n${output}`);
-    });
-  });
-}
-
 const skills = loadSkills();
 const byName = new Map(skills.map((skill) => [skill.name, skill]));
 
@@ -162,50 +125,7 @@ const skillTool = defineTool({
   },
 });
 
-// Scoped script runner: executes only files inside a skill's directory,
-// interpreter by extension, argv passed directly (no shell). The scripts are
-// reviewed code from the skills repos; this keeps the model off arbitrary commands.
-const runScriptTool = defineTool({
-  name: "run_script",
-  description:
-    "Run a script bundled with a skill. `skill` and `path` locate it (path relative to the " +
-    "skill directory); `args` are passed to the script verbatim. Interpreters: .py, .js/.mjs, .sh.",
-  parameters: Type.Object({
-    skill: Type.String(),
-    path: Type.String(),
-    args: Type.Optional(Type.Array(Type.String())),
-  }),
-  execute: async (args) => {
-    const skill = byName.get(args.skill);
-    if (skill === undefined) {
-      return { isError: true, output: [{ type: "text", text: `unknown skill: ${args.skill}` }] };
-    }
-    const script = join(skill.dir, args.path);
-    if (!script.startsWith(skill.dir)) {
-      return {
-        isError: true,
-        output: [{ type: "text", text: `path escapes the skill directory: ${args.path}` }],
-      };
-    }
-    const interpreter = script.endsWith(".py")
-      ? (process.env.PYTHON ?? (process.platform === "win32" ? "python" : "python3"))
-      : script.endsWith(".js") || script.endsWith(".mjs")
-        ? process.execPath
-        : script.endsWith(".sh")
-          ? "bash"
-          : undefined;
-    if (interpreter === undefined) {
-      return {
-        isError: true,
-        output: [{ type: "text", text: `unsupported script type: ${args.path}` }],
-      };
-    }
-    const result = await runScriptProcess(interpreter, script, args.args ?? [], skill.dir);
-    return { output: [{ type: "text", text: result.slice(0, 30_000) }] };
-  },
-});
-
-const tools: ToolRegistration[] = [skillTool, runScriptTool];
+const tools: ToolRegistration[] = [skillTool];
 
 const extension: Extension = defineExtension({
   name: "skills",
@@ -214,7 +134,7 @@ const extension: Extension = defineExtension({
     section("skills", () =>
       skills.length === 0
         ? undefined
-        : `Agent skills available — load one with the skill tool before doing work it covers; run its bundled scripts with run_script:\n${skills
+        : `Agent skills available — load one with the skill tool before doing work it covers; run its bundled scripts with the bash tool:\n${skills
             .map((skill: Skill) => `- ${skill.name}: ${skill.description}`)
             .join("\n")}`,
     ),
@@ -222,12 +142,3 @@ const extension: Extension = defineExtension({
 });
 
 export default extension;
-
-// run_script floor: write-named scripts hold when the classifier is unreachable.
-offlineFloors.push((tool: string, args) => {
-  if (tool !== "run_script") {
-    return undefined;
-  }
-  const path = typeof args.path === "string" ? args.path.toLowerCase() : "";
-  return /(create|update|link|bump|trigger|sync|delete|close)/.test(path) ? true : undefined;
-});

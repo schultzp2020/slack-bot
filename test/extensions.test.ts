@@ -12,6 +12,8 @@ describe("extension discovery", () => {
     expect(installed).toContain("skills");
     expect(installed).toContain("warden");
     expect(installed).toContain("codemode");
+    expect(installed).toContain("coding-tools");
+    expect(installed).toContain("memory");
     expect(new Set(installed).size).toBe(installed.length);
   });
 });

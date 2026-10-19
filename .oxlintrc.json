@@ -99,5 +99,16 @@
     "vitest/prefer-to-be-truthy": "warn",
     "vitest/prefer-to-be-falsy": "warn"
   },
-  "ignorePatterns": ["**/node_modules", "**/dist", "**/data", "**/docs", "**/.agents"]
+  "ignorePatterns": ["**/node_modules", "**/dist", "**/data", "**/docs", "**/.agents"],
+  "overrides": [
+    {
+      "files": ["src/slack.ts"],
+      "rules": {
+        "typescript/no-unsafe-call": "off",
+        "typescript/no-unsafe-assignment": "off",
+        "typescript/no-unsafe-argument": "off",
+        "typescript/no-unsafe-member-access": "off"
+      }
+    }
+  ]
 }
