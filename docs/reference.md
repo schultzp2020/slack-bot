@@ -16,23 +16,27 @@ Environment variables override `config.yaml` where noted in `.env.example`: `MOD
 
 ## Tools offered to the model
 
-| Tool         | Source                       | Purpose                                                                                     |
-| ------------ | ---------------------------- | ------------------------------------------------------------------------------------------- |
-| `jira`       | `src/extensions/jira.ts`     | Runs `acli` commands; read-only by convention, gated by the warden                          |
-| `skill`      | `src/extensions/skills.ts`   | Loads a skill's `SKILL.md` or a supporting file inside its directory                        |
-| `run_script` | `src/extensions/skills.ts`   | Runs a skill's bundled script (`.py`/`.js`/`.sh`), scoped to the skill directory, 120 s cap |
-| `codemode`   | `src/extensions/codemode.ts` | Model-written JavaScript in a QuickJS sandbox, calling the other tools; crash-safe replay   |
+| Tool                         | Source                       | Purpose                                                                                   |
+| ---------------------------- | ---------------------------- | ----------------------------------------------------------------------------------------- |
+| `jira`                       | `src/extensions/jira.ts`     | Runs `acli` commands; read-only by convention, gated by the warden                        |
+| `skill`                      | `src/extensions/skills.ts`   | Loads a skill's `SKILL.md` or a supporting file inside its directory                      |
+| `bash`/`read`/`write`/`edit` | `src/extensions/shell.ts`    | pi-durable's coding tools via the Node execution env: journaled, crash-safe, replayable   |
+| `remember`/`recall`          | `src/extensions/memory.ts`   | Shared team memory (LRU, indexed by issue keys)                                           |
+| `codemode`                   | `src/extensions/codemode.ts` | Model-written JavaScript in a QuickJS sandbox, calling the other tools; crash-safe replay |
 
-There is no general shell tool, by design: the model can run reviewed scripts from skill directories and nothing else.
+The coding tools are general-purpose by design (skill scripts run through `bash`), and the warden is the security boundary: every coding-tool call is classified, none has a read-only shortcut, and secret files (`.env`, `data/`, `.git`) are hard-denied before classification — they never enter model context, even with an approval.
 
 ## The warden (`src/extensions/warden.ts`)
 
-Before every tool call:
+Before every tool call, in order:
 
-1. **Ask gate** — an offline floor vouching `false` (read-only) passes with no classifier request.
-2. **Approval window** — a recent in-thread approval passes.
-3. **Classifier score** — the local System One classifier scores the call; at or above `WARDEN_HOLD_SCORE` the call is blocked with write-gate instructions.
-4. **Offline floor** — when the classifier is unreachable, write-shaped calls hold and unknown tools hold (fail closed).
+1. **Secret deny** — a `read` of credentials or durable state (`.env*`, `data/`, `.git/`, `bot.log`, `session.sqlite`), or a `bash` command obviously referencing them, is blocked outright. Approval cannot override this.
+2. **Granted approval** — a call matching the exact (tool, arguments) of a granted approval passes once; the grant is consumed.
+3. **Ask gate** — an offline floor vouching `false` (read-only) passes with no classifier request. The coding tools never vouch.
+4. **Classifier score** — the local System One classifier scores the call; at or above `WARDEN_HOLD_SCORE` the call is blocked with write-gate instructions that include a four-character approval code.
+5. **Offline floor** — when the classifier is unreachable, write-shaped calls hold and unknown tools hold (fail closed).
+
+A held call is approved by the user who requested it, replying `approve <code>` in the thread (mentioning the bot). The grant matches only that exact call, is single-use, and expires after `warden.approval_window_ms`. Saying "yes" or "go ahead" alone opens nothing.
 
 After every tool call, the result text is scored for prompt injection; at or above `WARDEN_INJECTION_SCORE` it is wrapped as untrusted data before the model sees it.
 
@@ -42,7 +46,7 @@ After every tool call, the result text is scored for prompt injection; at or abo
 
 ## Storage
 
-- `data/session.sqlite` — all durable state: conversations, entries, tool results, thread map (`app.slack_threads`), warden approvals (`app.warden`). One process at a time (PID lockfile `data/bot.lock`).
+- `data/session.sqlite` — all durable state: conversations, entries, tool results, thread map (`app.slack_threads`), thread index (`app.thread_index`), channel watermarks (`app.channels`), schedules (`app.schedules`), team memory (`app.memory`), warden settings (`app.warden_settings`). One process at a time (PID lockfile `data/bot.lock`).
 - `.agents/skills/` — project skills (gitignored checkouts of skills packs live here), scanned alongside `~/.agents/skills`.
 
 ## npm scripts
@@ -55,11 +59,11 @@ After every tool call, the result text is scored for prompt injection; at or abo
 
 ## Key source files
 
-| File              | Role                                                                 |
-| ----------------- | -------------------------------------------------------------------- |
-| `src/index.ts`    | Entry point: lockfile, Harness open + resume, Slack start, presence  |
-| `src/harness.ts`  | Model gateway provider, extension discovery, thread→conversation map |
-| `src/slack.ts`    | Bolt relay: mention handler, reconcile, steer, streaming placeholder |
-| `src/extensions/` | One file per extension, default-exported, auto-installed             |
-| `src/config.ts`   | All env-driven configuration                                         |
-| `src/util.ts`     | Pure helpers (answer extraction, status lines, email linkifying)     |
+| File              | Role                                                                                |
+| ----------------- | ----------------------------------------------------------------------------------- |
+| `src/index.ts`    | Entry point: lockfile, Harness open + resume, recovery sweep, Slack start, presence |
+| `src/harness.ts`  | Model gateway provider, extension discovery, thread→conversation map                |
+| `src/slack.ts`    | Bolt relay: mention handler, reconcile, steer, streaming placeholder                |
+| `src/extensions/` | One file per extension, default-exported, auto-installed                            |
+| `src/config.ts`   | All env-driven configuration                                                        |
+| `src/util.ts`     | Pure helpers (answer extraction, status lines, email linkifying)                    |

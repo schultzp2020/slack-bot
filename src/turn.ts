@@ -1,10 +1,8 @@
 // One agent turn, shared by mentions, slash commands, schedules, and the
 // recovery sweep: reconcile thread context, submit the input (steering when
 // busy), stream progress into a placeholder, replace it with the answer.
-import type { AllMessageEvents, GenericMessageEvent } from "@slack/types";
+import type { AllMessageEvents } from "@slack/types";
 import { AssistantEntry, LiveDoc, type Harness } from "@earendil-works/pi-durable";
-import { WARDEN_APPROVAL_WINDOW_MS } from "./config.ts";
-import { WardenDoc, approvalRegex } from "./extensions/warden.ts";
 import {
   markChannelSeen,
   markThreadSeen,
@@ -12,6 +10,7 @@ import {
   threadLastSeenTs,
   context,
 } from "./harness.ts";
+import { approvalCode, grantApproval, setTurnRequester } from "./extensions/warden.ts";
 import { answerText, linkifyEmails, liveStatusText, settledAnswer } from "./util.ts";
 
 /** The Slack client methods a turn uses. */
@@ -28,31 +27,58 @@ export interface SlackClient {
     replies: (args: {
       channel: string;
       ts: string;
+      oldest?: string;
       limit: number;
     }) => Promise<{ messages?: unknown[] }>;
     history: (args: {
       channel: string;
       oldest?: string;
+      cursor?: string;
       limit: number;
-    }) => Promise<{ messages?: unknown[] }>;
+    }) => Promise<{
+      messages?: unknown[];
+      has_more?: boolean;
+      response_metadata?: { next_cursor?: string };
+    }>;
   };
 }
 
 /** Any message-shaped Slack event we handle. */
-type SlackMessage =
-  | AllMessageEvents
-  | { subtype?: string; bot_id?: string; text?: string; ts?: string; user?: string };
+interface StructuralMessage {
+  subtype?: string;
+  bot_id?: string;
+  text?: string;
+  ts?: string;
+  user?: string;
+}
+
+type SlackMessage = AllMessageEvents | StructuralMessage;
 
 export function isHumanMessage(
   message: SlackMessage,
-): message is GenericMessageEvent & { text: string } {
+): message is SlackMessage & { text: string; ts: string; user: string } {
   return (
     message.subtype === undefined &&
     message.bot_id === undefined &&
     message.text !== undefined &&
+    message.ts !== undefined &&
     message.user !== undefined
   );
 }
+
+/** Remove @-mentions from message text. */
+export function stripMentions(text: string): string {
+  return text.replaceAll(/<@[^>]+>/g, "").trim();
+}
+
+/** Whether a message mentions the bot (and so triggers a turn). */
+export function isMentionOfBot(botUserId: string, text: string): boolean {
+  return botUserId !== "" && text.includes(`<@${botUserId}>`);
+}
+
+/** Blank ping: the user wants the bot to infer the next step from context. */
+export const BLANK_PING_TEXT =
+  "(The user pinged you with no message. Look at the thread so far and do what you think is the next step; if it is genuinely ambiguous, ask one short question.)";
 
 export interface TurnDeps {
   harness: Harness;
@@ -66,17 +92,17 @@ export interface TurnInput {
   threadTs?: string;
   /** Final input content for the model. */
   text: string;
-  /** The user's raw text, for approval detection. */
-  rawText: string;
   requestId: string;
   /** Prefix shown in the placeholder (e.g. the slash invocation). */
   placeholderPrefix?: string;
+  /** The Slack user who caused this turn; approvals bind to them. */
+  requesterUserId?: string;
+  /** Source event ts; advances the recovery watermark (never the placeholder's). */
+  sourceTs?: string;
 }
 
 export async function runTurn(deps: TurnDeps, input: TurnInput): Promise<void> {
   const { harness, client } = deps;
-  const isMentionOfBot = (text: string) =>
-    deps.botUserId !== "" && text.includes(`<@${deps.botUserId}>`);
 
   // Placeholder first: for a new thread it is the root message.
   const placeholder = await client.chat.postMessage({
@@ -91,13 +117,19 @@ export async function runTurn(deps: TurnDeps, input: TurnInput): Promise<void> {
   const threadTs = input.threadTs ?? progressTs;
 
   const conversation = await threadConversation(harness, input.channel, threadTs);
+  setTurnRequester(conversation.id, input.requesterUserId);
 
-  // An approval reply opens the warden gate for this conversation's next risky call.
-  if (approvalRegex().test(input.rawText)) {
-    await harness.commit(async (tx) => {
-      const warden = await tx.doc(WardenDoc, conversation.id);
-      warden.approvalUntil = Date.now() + WARDEN_APPROVAL_WINDOW_MS;
-    }, context);
+  // An approval reply ("approve <code>", mentioning the bot) grants the held
+  // call; the input then tells the model to retry that exact call.
+  const code = approvalCode(input.text);
+  let content = input.text;
+  if (code !== undefined) {
+    const held = grantApproval(conversation.id, code, input.requesterUserId);
+    if (held !== undefined) {
+      content =
+        `[The user approved the held ${held.tool} call (code ${held.code}). ` +
+        `Retry exactly that call now — the approval matches only it.]`;
+    }
   }
 
   // Pull unseen human replies, so the turn sees the whole thread. When the
@@ -111,20 +143,28 @@ export async function runTurn(deps: TurnDeps, input: TurnInput): Promise<void> {
     ) => Promise<{ run?: unknown } | undefined>;
   };
   const busy = (await busyReader.snapshot(LiveDoc, conversation.id, context))?.run !== undefined;
-  let content = input.text;
   const lastSeen = await threadLastSeenTs(harness, input.channel, threadTs);
   if (lastSeen < progressTs) {
     const replies =
-      (await client.conversations.replies({ channel: input.channel, ts: threadTs, limit: 200 }))
-        .messages ?? [];
+      (
+        await client.conversations.replies({
+          channel: input.channel,
+          ts: threadTs,
+          oldest: lastSeen,
+          limit: 200,
+        })
+      ).messages ?? [];
     const unseen = (replies as unknown as AllMessageEvents[]).filter(
       (m): m is AllMessageEvents & { text: string; ts: string; user: string } =>
-        isHumanMessage(m) && m.ts > lastSeen && m.ts < progressTs && !isMentionOfBot(m.text),
+        isHumanMessage(m) &&
+        m.ts > lastSeen &&
+        m.ts < progressTs &&
+        !isMentionOfBot(deps.botUserId, m.text),
     );
     if (busy) {
       const lines = unseen.map((m) => `<@${m.user}>: ${m.text}`).join("\n");
       if (lines !== "") {
-        content = `${input.text}\n\n[Thread messages sent while you were working — take them into account now:]\n${lines}`;
+        content = `${content}\n\n[Thread messages sent while you were working — take them into account now:]\n${lines}`;
       }
     } else {
       for (const message of unseen) {
@@ -185,6 +225,10 @@ export async function runTurn(deps: TurnDeps, input: TurnInput): Promise<void> {
     text: linkifyEmails(reply).slice(0, 3900),
   });
 
-  // Advance the channel watermark so the recovery sweep never rescans this.
-  await markChannelSeen(harness, input.channel, progressTs);
+  // Advance the channel watermark to the SOURCE event ts (never the
+  // placeholder's, which is newer than unprocessed offline events), so the
+  // recovery sweep resumes exactly behind what has actually been handled.
+  if (input.sourceTs !== undefined) {
+    await markChannelSeen(harness, input.channel, input.sourceTs);
+  }
 }

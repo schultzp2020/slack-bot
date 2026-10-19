@@ -175,3 +175,78 @@ describe("thread retirement", () => {
     expect(staleThreadKeys({ fresh, stale, bad: "0" }, now, ttl)).toEqual(["stale"]);
   });
 });
+
+describe("warden approval codes", () => {
+  it("accepts only a whole-message 'approve <code>' reply", async () => {
+    const { approvalCode } = await import("../src/extensions/warden.ts");
+    expect(approvalCode("approve K7QP")).toBe("K7QP");
+    expect(approvalCode("Approve k7qp")).toBe("K7QP");
+    expect(approvalCode("  approve K7QP  ")).toBe("K7QP");
+    // The old spoof: "approval" inside an arbitrary sentence opens nothing.
+    expect(approvalCode("without approval")).toBeUndefined();
+    expect(approvalCode("yes")).toBeUndefined();
+    expect(approvalCode("approve K7QP please")).toBeUndefined();
+    expect(approvalCode("approve K7Q")).toBeUndefined();
+  });
+
+  it("binds grants to the code, the requester, and the exact call, single use", async () => {
+    const { holdCall, grantApproval, consumeGrant, setTurnRequester } =
+      await import("../src/extensions/warden.ts");
+    const args = { command: "git push" };
+    setTurnRequester(9101, "U-REQUESTER");
+    const held = holdCall(9101, "bash", args);
+    // Wrong code or wrong user: no grant.
+    expect(grantApproval(9101, "XXXX", "U-REQUESTER")).toBeUndefined();
+    expect(grantApproval(9101, held.code, "U-OTHER")).toBeUndefined();
+    // The requester with the right code: granted.
+    expect(grantApproval(9101, held.code, "U-REQUESTER")).toBeDefined();
+    // Only the exact call passes, once.
+    expect(consumeGrant(9101, "bash", args)).toBeTruthy();
+    expect(consumeGrant(9101, "bash", args)).toBeFalsy();
+    expect(consumeGrant(9101, "bash", { command: "rm -rf /" })).toBeFalsy();
+  });
+});
+
+describe("warden secret-path deny", () => {
+  it("flags credentials and durable state, resolves cwd-relative paths", async () => {
+    const { isSecretPath, resolveToolPath } = await import("../src/extensions/warden.ts");
+    const cwd = process.cwd();
+    expect(isSecretPath(resolveToolPath(".env", cwd))).toBeTruthy();
+    expect(isSecretPath(resolveToolPath("../repo/.env.production", cwd))).toBeTruthy();
+    expect(isSecretPath(resolveToolPath("data/session.sqlite", cwd))).toBeTruthy();
+    expect(isSecretPath(resolveToolPath("src/config.ts", cwd))).toBeFalsy();
+    expect(isSecretPath(resolveToolPath(".git/config", cwd))).toBeTruthy();
+  });
+
+  it("flags obvious secret references in shell commands", async () => {
+    const { commandTouchesSecrets } = await import("../src/extensions/warden.ts");
+    expect(commandTouchesSecrets("cat .env")).toBeTruthy();
+    expect(commandTouchesSecrets("sqlite3 data/session.sqlite .tables")).toBeTruthy();
+    expect(commandTouchesSecrets("echo hello")).toBeFalsy();
+  });
+});
+
+describe("schedule occurrences", () => {
+  it("catches up yesterday's missed run", async () => {
+    const { isDue, lastOccurrenceMs } = await import("../src/schedules.ts");
+    // Daily at 06:00; it is 05:00 today: the latest occurrence is yesterday's.
+    const now = new Date("2026-10-19T05:00:00");
+    const yesterday = new Date("2026-10-18T06:00:00").getTime();
+    expect(lastOccurrenceMs("06:00", now)).toBe(yesterday);
+    expect(
+      isDue(
+        { name: "x", daily_at: "06:00", channel: "c", prompt: "p" },
+        yesterday - 1,
+        now.getTime(),
+      ),
+    ).toBeTruthy();
+    expect(
+      isDue({ name: "x", daily_at: "06:00", channel: "c", prompt: "p" }, yesterday, now.getTime()),
+    ).toBeFalsy();
+    // Later the same day: today's occurrence is due.
+    const later = new Date("2026-10-19T07:00:00").getTime();
+    expect(
+      isDue({ name: "x", daily_at: "06:00", channel: "c", prompt: "p" }, yesterday, later),
+    ).toBeTruthy();
+  });
+});

@@ -35,15 +35,15 @@ Step-by-step recipes for common tasks. Each assumes the bot is set up (`docs/tut
 
 2. Restart the bot. The skill is advertised in the system prompt by name and description; the model loads the full file with the `skill` tool when a task matches.
 
-Skills bundled in `~/.agents/skills` are discovered too. Project skills shadow user skills with the same name. To run a skill's bundled scripts, the model uses `run_script` (interpreter by extension: `.py`, `.js`/`.mjs`, `.sh`).
+Skills bundled in `~/.agents/skills` are discovered too. Project skills shadow user skills with the same name. To run a skill's bundled scripts, the model uses the `bash` tool (`python .agents/skills/<skill>/script.py`); every run passes the warden.
 
 ## Approve a held action
 
-When the warden holds a write (the reply says so and asks for approval):
+When the warden holds a write (the reply says so and includes a four-character approval code):
 
 1. Read the stated target, command, and failure mode in the thread.
-2. Reply in the thread with a word like `approved`, `yes`, `do it`, `go ahead`, or `lgtm`.
-3. The bot retries the held call; the approval opens a 10-minute window for that conversation.
+2. The user who requested the work replies `approve <code>`, mentioning the bot.
+3. The bot retries exactly the held call; the approval matches only that call, is single-use, and expires after `warden.approval_window_ms`. Loose "yes"/"go ahead" replies open nothing.
 
 ## Restart the bot safely
 
@@ -61,10 +61,10 @@ The PID lockfile (`data/bot.lock`) refuses a second instance while one is live, 
 If read-only calls get held (false positives) or writes slip through (false negatives):
 
 1. Check the held call's score in the block message (e.g. "scored it 0.80").
-2. Tune `WARDEN_HOLD_SCORE` in `.env` — lower holds more, higher holds less. Default `0.75`.
-3. For systematic false positives on your tool's read paths, fix its offline floor so those calls return `false` and skip the classifier entirely.
+2. Tune the threshold live with `/warden 0.8` — Slack user IDs in the `admins` list of `config.yaml` only; the change is persisted across restarts. Reading it (`/warden`) is open to everyone.
+3. For systematic false positives on your tool's read paths, fix its offline floor so those calls return `false` and skip the classifier entirely. (The coding tools deliberately never vouch.)
 
-The classifier itself is your local llama.cpp server (`WARDEN_URL`, default `http://127.0.0.1:18080`). If it is down, the warden falls back to the offline floors and holds anything without a read-only opinion — fail closed.
+The default threshold is `WARDEN_HOLD_SCORE` in `.env` (or `warden.hold_score` in `config.yaml`). The classifier itself is your local llama.cpp server (`WARDEN_URL`, default `http://127.0.0.1:18080`). If it is down, the warden falls back to the offline floors and holds anything without a read-only opinion — fail closed.
 
 ## Run the checks
 

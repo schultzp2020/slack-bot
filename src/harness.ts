@@ -129,7 +129,11 @@ export async function markChannelSeen(
 ): Promise<void> {
   await harness.commit(async (tx) => {
     const doc = await (tx as unknown as ChannelsWriter).doc(Channels);
-    doc.seen[channel] = ts;
+    // Max-merge: a stale writer (e.g. recovery of an older event) must never
+    // move the frontier backwards.
+    if (ts > (doc.seen[channel] ?? "0")) {
+      doc.seen[channel] = ts;
+    }
   }, context);
 }
 
@@ -186,19 +190,35 @@ export function staleThreadKeys(
 export async function retireStaleThreads(harness: Harness, ttlMs: number): Promise<number> {
   const reader = harness as unknown as ThreadIndexReader;
   const used = (await reader.snapshot(ThreadIndex, context))?.used ?? {};
-  const stale = staleThreadKeys(used, Date.now(), ttlMs);
-  if (stale.length === 0) {
+  const candidates = new Set(staleThreadKeys(used, Date.now(), ttlMs));
+  if (candidates.size === 0) {
     return 0;
   }
+  let retired = 0;
   await harness.commit(async (tx) => {
     const index = await (tx as unknown as ThreadIndexWriter).doc(ThreadIndex);
     const retirer = tx as unknown as ThreadIndexRetirer;
-    for (const key of stale) {
+    for (const key of candidates) {
+      // Recheck inside the transaction: a turn that refreshed this thread
+      // since our snapshot must not have its mapping pulled out from under it.
+      if (!(key in index.used)) {
+        continue; // already retired by an earlier sweep
+      }
+      if (staleThreadKeys({ [key]: index.used[key] }, Date.now(), ttlMs).length === 0) {
+        continue; // refreshed since our snapshot
+      }
       await retirer.retireDoc(Threads, key);
       delete index.used[key];
+      retired++;
     }
   }, context);
-  return stale.length;
+  return retired;
+}
+
+/** Snapshot of the thread index: threadKey -> last-used ts. */
+export async function threadIndexSnapshot(harness: Harness): Promise<Record<string, string>> {
+  const reader = harness as unknown as ThreadIndexReader;
+  return (await reader.snapshot(ThreadIndex, context))?.used ?? {};
 }
 
 export async function threadLastSeenTs(
@@ -232,6 +252,10 @@ export async function threadConversation(
   const key = threadKey(channel, threadTs);
   const id = await harness.commit(async (tx) => {
     const thread = await tx.doc(Threads, key, { channel });
+    // Refresh the index here too: acquiring a conversation means the thread
+    // is in active use, so retirement (which rechecks in-transaction) will
+    // not pull the mapping out from under a running turn.
+    (await (tx as unknown as ThreadIndexWriter).doc(ThreadIndex)).used[key] = threadTs;
     if (thread.conversationId !== 0) {
       return thread.conversationId as ConversationId;
     }

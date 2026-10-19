@@ -22,9 +22,16 @@ interface ConfigFile {
   };
   codemode: { memory_mb: number };
   threads: { ttl_days: number };
-  commands?: { name: string; description: string; prompt?: string }[];
-  schedules?: { name: string; daily_at: string; channel: string; prompt: string }[];
+  admins?: string[];
+  commands?: CommandConfig[];
+  schedules?: ScheduleConfig[];
   system_prompt: string;
+}
+
+export interface CommandConfig {
+  name: string;
+  description: string;
+  prompt?: string;
 }
 
 export interface ScheduleConfig {
@@ -57,7 +64,7 @@ export const WARDEN_HOLD_SCORE = Number(process.env.WARDEN_HOLD_SCORE ?? file.wa
 export const WARDEN_INJECTION_SCORE = Number(
   process.env.WARDEN_INJECTION_SCORE ?? file.warden.injection_score,
 );
-/** How long an in-thread approval opens the gate, in milliseconds. */
+/** How long a held call's approval code is valid, in milliseconds. */
 export const WARDEN_APPROVAL_WINDOW_MS = file.warden.approval_window_ms;
 
 // --- Codemode ----------------------------------------------------------------
@@ -72,8 +79,10 @@ export const CODEMODE_MEMORY_LIMIT_BYTES =
 // --- Commands and schedules ----------------------------------------------------
 
 /** Slash commands: /name [text] runs the preset prompt. Also declare each in manifest.yml. */
-export const COMMANDS: { name: string; description: string; prompt?: string }[] =
-  file.commands ?? [];
+export const COMMANDS: CommandConfig[] = file.commands ?? [];
+
+/** Slack user IDs allowed to change security settings (/warden setter). */
+export const ADMINS: string[] = file.admins ?? [];
 
 /** Scheduled turns; a run missed while the bot was down is caught up on startup. */
 export const SCHEDULES: ScheduleConfig[] = file.schedules ?? [];

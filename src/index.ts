@@ -7,9 +7,10 @@ import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { SCHEDULES } from "./config.ts";
 import { createRuntimeModels, createRuntimeRegistry, context } from "./harness.ts";
+import { loadPersistedHoldScore } from "./extensions/warden.ts";
 import { recoverMissedMentions } from "./recovery.ts";
 import { startSchedules } from "./schedules.ts";
-import { startSlackApp } from "./slack.ts";
+import { createSlackApp } from "./slack.ts";
 
 // pi-durable mints record IDs from an in-process counter with no cross-process
 // locking: a second live bot on the same SQLite file corrupts commits. This
@@ -52,9 +53,14 @@ export async function main() {
     context,
   );
   harness.resume(); // continue runs the last process left unfinished
+  await loadPersistedHoldScore(harness); // a /warden change survives restarts
 
-  const { setStatus, deps } = await startSlackApp(harness);
+  const { slack, setStatus, deps } = await createSlackApp(harness);
+  // Sweep BEFORE connecting: live traffic must not advance the channel
+  // watermarks past offline mentions the sweep has not processed yet.
   await recoverMissedMentions(deps); // answer pings that arrived while we were down
+  await slack.start();
+  await setStatus(true);
   const stopSchedules = startSchedules(deps, SCHEDULES);
 
   console.log("slack-bot up (socket mode, pi-durable harness)");

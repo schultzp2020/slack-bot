@@ -18,6 +18,20 @@ import {
   type Extension,
   type ToolRegistration,
 } from "@earendil-works/pi-durable";
+import { offlineFloors } from "./warden.ts";
+
+// The warden's offline opinion: recall only searches stored notes, remember
+// appends to them. So recall skips the classifier when it is down, remember
+// holds (fail closed).
+offlineFloors.push((tool: string) => {
+  if (tool === "recall") {
+    return false;
+  }
+  if (tool === "remember") {
+    return true;
+  }
+  return undefined;
+});
 
 // A type alias, not an interface: only aliases satisfy the JsonObject
 // constraint of the doc definition.

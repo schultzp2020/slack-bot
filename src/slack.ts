@@ -2,10 +2,10 @@
 import type { AppMentionEvent } from "@slack/types";
 import { App } from "@slack/bolt";
 import type { Harness } from "@earendil-works/pi-durable";
-import { COMMANDS } from "./config.ts";
+import { ADMINS, COMMANDS, type CommandConfig } from "./config.ts";
 import { context } from "./harness.ts";
-import { getWardenHoldScore, setWardenHoldScore } from "./extensions/warden.ts";
-import { runTurn, type TurnDeps } from "./turn.ts";
+import { getWardenHoldScore, persistHoldScore, setWardenHoldScore } from "./extensions/warden.ts";
+import { BLANK_PING_TEXT, runTurn, stripMentions, type TurnDeps } from "./turn.ts";
 
 // chisle: Bolt's listener-arg generics don't resolve under oxlint's type checker; typed structurally instead.
 interface CommandArgs {
@@ -42,7 +42,7 @@ function registerCommand(
 /** A configured command: run its preset prompt in a new thread. */
 async function handleConfiguredCommand(
   deps: TurnDeps,
-  command: { name: string; prompt?: string },
+  command: CommandConfig,
   args: CommandArgs,
 ): Promise<void> {
   const cmd = args.command;
@@ -55,10 +55,10 @@ ${cmd.text}`.trim()
   await runTurn(deps, {
     channel: cmd.channel_id,
     text: content,
-    rawText: cmd.text,
     requestId: `cmd:${cmd.trigger_id}`,
     placeholderPrefix: `/${command.name} ${cmd.text}
 `,
+    requesterUserId: cmd.user_id,
   });
 }
 
@@ -78,27 +78,32 @@ async function handleStatsCommand(harness: Harness, args: CommandArgs): Promise<
 
 /** /warden logic, at module scope so no Bolt generic inference is involved. */
 async function handleWardenCommand(harness: Harness, args: CommandArgs): Promise<void> {
-  void harness;
   const { command: cmd, client } = args;
   const arg = cmd.text.trim();
   let message: string;
   if (arg === "") {
-    message = `Warden hold threshold: ${getWardenHoldScore()}. Set with /warden 0.8.`;
+    message = `Warden hold threshold: ${getWardenHoldScore()}. ${ADMINS.length > 0 ? "Set with /warden 0.8 (admins only)." : "Set with /warden 0.8 (needs admins in config.yaml)."}`;
+  } else if (!ADMINS.includes(cmd.user_id)) {
+    message = "Only admins (config.yaml admins list) may change the warden threshold.";
   } else {
     const value = Number(arg);
     if (!Number.isFinite(value) || value < 0 || value > 1) {
       message = "Give a threshold between 0 and 1, e.g. /warden 0.8.";
     } else {
       setWardenHoldScore(value);
-      message = `Warden hold threshold set to ${value}.`;
+      await persistHoldScore(harness, value);
+      message = `Warden hold threshold set to ${value} (persisted).`;
     }
   }
   await client.chat.postMessage({ channel: cmd.channel_id, text: message });
 }
 
-export async function startSlackApp(
+/** Build the Slack app and its deps without connecting yet. Listeners are
+ * registered here; call `slack.start()` (then setStatus(true)) once startup
+ * work that must not race live traffic — the recovery sweep — is done. */
+export async function createSlackApp(
   harness: Harness,
-): Promise<{ setStatus: (online: boolean) => Promise<unknown>; deps: TurnDeps }> {
+): Promise<{ slack: App; setStatus: (online: boolean) => Promise<unknown>; deps: TurnDeps }> {
   const slack = new App({
     token: process.env.SLACK_BOT_TOKEN,
     appToken: process.env.SLACK_APP_TOKEN,
@@ -122,25 +127,26 @@ export async function startSlackApp(
       if (event.user === undefined) {
         return; // bot or system message
       }
-      const text = event.text.replaceAll(/<@[^>]+>/g, "").trim();
+      const text = stripMentions(event.text);
       // Blank ping: the user wants the bot to infer the next step from context.
-      const content =
-        text !== ""
-          ? text
-          : "(The user pinged you with no message. Look at the thread so far and do what you think is the next step; if it is genuinely ambiguous, ask one short question.)";
+      const content = text !== "" ? text : BLANK_PING_TEXT;
+      // A root mention threads under itself (thread_ts ?? ts), so a Slack
+      // event retry continues the same conversation and the requestId
+      // (`slack:<ts>`) dedupes it instead of re-running every tool call.
       await runTurn(deps, {
         channel: event.channel,
-        ...(event.thread_ts !== undefined ? { threadTs: event.thread_ts } : {}),
+        threadTs: event.thread_ts ?? event.ts,
         text: content,
-        rawText: text,
         requestId: `slack:${event.ts}`,
+        requesterUserId: event.user,
+        sourceTs: event.ts,
       });
     } catch (error) {
       logger.error(error);
     }
   });
 
-  // /warden [score]: read or set the hold threshold live, no restart needed.
+  // /warden [score]: read the hold threshold; admins set it live, persisted.
   registerCommand(slack, "/warden", async (args) => {
     await handleWardenCommand(harness, args);
   });
@@ -162,7 +168,5 @@ export async function startSlackApp(
   const setStatus = async (online: boolean) =>
     slack.client.users.setPresence({ presence: online ? "auto" : "away" }).catch(() => undefined);
 
-  await slack.start();
-  await setStatus(true);
-  return { setStatus, deps };
+  return { slack, setStatus, deps };
 }
