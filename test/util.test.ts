@@ -165,17 +165,6 @@ describe("memory ranking", () => {
   });
 });
 
-describe("thread retirement", () => {
-  it("flags threads idle beyond the TTL", async () => {
-    const { staleThreadKeys, tsToMs } = await import("../src/harness.ts");
-    const now = tsToMs("3000000.000000");
-    const ttl = 30 * 24 * 60 * 60_000;
-    const fresh = `${(now - 1000) / 1000}`;
-    const stale = `${(now - ttl - 5000) / 1000}`;
-    expect(staleThreadKeys({ fresh, stale, bad: "0" }, now, ttl)).toEqual(["stale"]);
-  });
-});
-
 describe("warden approval codes", () => {
   it("accepts only a whole-message 'approve <code>' reply", async () => {
     const { approvalCode } = await import("../src/extensions/warden.ts");
@@ -248,5 +237,58 @@ describe("schedule occurrences", () => {
     expect(
       isDue({ name: "x", daily_at: "06:00", channel: "c", prompt: "p" }, yesterday, later),
     ).toBeTruthy();
+  });
+});
+
+describe("warden threshold setter", () => {
+  it("persists first: a failed write leaves the previous threshold in effect", async () => {
+    const { getWardenHoldScore, setWardenHoldScore } = await import("../src/extensions/warden.ts");
+    const before = getWardenHoldScore();
+    const failingHarness = {
+      commit: () => Promise.reject(new Error("storage down")),
+    };
+    await expect(setWardenHoldScore(failingHarness, 0.11)).rejects.toThrow("storage down");
+    expect(getWardenHoldScore()).toBe(before);
+  });
+});
+
+describe("commandPath", () => {
+  it("keeps the positional path, skipping flags and their values", async () => {
+    const { commandPath } = await import("../src/util.ts");
+    expect(
+      commandPath(["jira", "workitem", "view", "PROJ-1", "--fields", "comment,issuelinks"]),
+    ).toEqual(["jira", "workitem", "view", "proj-1"]);
+    expect(commandPath(["--jql", "issue in linkedIssues(X)", "list"])).toEqual(["list"]);
+    // A write verb inside a flag value must not read as the command.
+    expect(commandPath(["view", "PROJ-1", "--fields", "comment"]).join(" ")).toBe("view proj-1");
+  });
+});
+
+describe("normalizeMention", () => {
+  it("threads root mentions under themselves and keeps recovered == live", async () => {
+    const { normalizeMention } = await import("../src/turn.ts");
+    const root = normalizeMention({
+      channel: "C1",
+      ts: "1000.5",
+      text: "<@U123> hello there",
+      user: "U9",
+    });
+    expect(root).toEqual({
+      channel: "C1",
+      threadTs: "1000.5",
+      text: "hello there",
+      requestId: "slack:1000.5",
+      requesterUserId: "U9",
+      sourceTs: "1000.5",
+    });
+    const reply = normalizeMention({
+      channel: "C1",
+      ts: "1001.0",
+      thread_ts: "1000.5",
+      text: "<@U123>",
+      user: "U9",
+    });
+    expect(reply.threadTs).toBe("1000.5");
+    expect(reply.text).toContain("pinged you with no message");
   });
 });

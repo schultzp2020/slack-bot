@@ -3,13 +3,8 @@
 // busy), stream progress into a placeholder, replace it with the answer.
 import type { AllMessageEvents } from "@slack/types";
 import { AssistantEntry, LiveDoc, type Harness } from "@earendil-works/pi-durable";
-import {
-  markChannelSeen,
-  markThreadSeen,
-  threadConversation,
-  threadLastSeenTs,
-  context,
-} from "./harness.ts";
+import { markChannelSeen, context } from "./harness.ts";
+import { markThreadSeen, openThread, threadLastSeenTs } from "./threads.ts";
 import { approvalCode, grantApproval, setTurnRequester } from "./extensions/warden.ts";
 import { answerText, linkifyEmails, liveStatusText, settledAnswer } from "./util.ts";
 
@@ -116,7 +111,7 @@ export async function runTurn(deps: TurnDeps, input: TurnInput): Promise<void> {
   }
   const threadTs = input.threadTs ?? progressTs;
 
-  const conversation = await threadConversation(harness, input.channel, threadTs);
+  const conversation = await openThread(harness, input.channel, threadTs);
   setTurnRequester(conversation.id, input.requesterUserId);
 
   // An approval reply ("approve <code>", mentioning the bot) grants the held
@@ -231,4 +226,40 @@ export async function runTurn(deps: TurnDeps, input: TurnInput): Promise<void> {
   if (input.sourceTs !== undefined) {
     await markChannelSeen(harness, input.channel, input.sourceTs);
   }
+}
+
+export interface MentionInput {
+  channel: string;
+  /** The mention message's own ts. */
+  ts: string;
+  /** The thread the mention lives in; a root mention threads under itself. */
+  thread_ts?: string;
+  /** Raw message text, mentions included. */
+  text: string;
+  /** The Slack user who sent it. */
+  user: string;
+}
+
+/**
+ * Normalize a mention into a turn input: strip mentions, blank-ping fallback,
+ * thread placement (root mentions thread under themselves, so retries and
+ * recoveries land in the same conversation), request identity, requester
+ * binding, and the recovery watermark source. One place, for live and
+ * recovered mentions alike.
+ */
+export function normalizeMention(mention: MentionInput): TurnInput {
+  const text = stripMentions(mention.text);
+  return {
+    channel: mention.channel,
+    threadTs: mention.thread_ts ?? mention.ts,
+    text: text !== "" ? text : BLANK_PING_TEXT,
+    requestId: `slack:${mention.ts}`,
+    requesterUserId: mention.user,
+    sourceTs: mention.ts,
+  };
+}
+
+/** Run one Slack mention, live or recovered. */
+export async function runMention(deps: TurnDeps, mention: MentionInput): Promise<void> {
+  await runTurn(deps, normalizeMention(mention));
 }

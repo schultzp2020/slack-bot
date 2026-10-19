@@ -26,6 +26,7 @@ import {
   WARDEN_MODEL,
   WARDEN_URL,
 } from "../config.ts";
+import { commandPath } from "../util.ts";
 
 // chisle: session-doc tokens don't infer under tsgolint; structural aliases, as in memory.ts.
 interface SettingsWriter {
@@ -75,7 +76,12 @@ export function getWardenHoldScore(): number {
   return holdScore;
 }
 
-export function setWardenHoldScore(value: number): void {
+/**
+ * Set the hold threshold: persist first, then update the runtime value, so a
+ * failed persistence leaves the previous threshold in effect.
+ */
+export async function setWardenHoldScore(harness: unknown, value: number): Promise<void> {
+  await persistHoldScore(harness, value);
   holdScore = value;
 }
 
@@ -260,18 +266,10 @@ async function riskScore(tool: string, args: JsonObject): Promise<number | undef
     // The classifier sees the command path, not raw argv soup: flag values
     // (--jql, --fields) are query parameters and have misled it before.
     const argv = Array.isArray(args.args) ? args.args.map(String) : [];
-    const positional: string[] = [];
-    for (let i = 0; i < argv.length; i++) {
-      if (argv[i].startsWith("--")) {
-        i++;
-        continue;
-      }
-      positional.push(argv[i].toLowerCase());
-    }
     const result = await llamaCppClassifyApi().classify(classifierModel, {
       state: {
         tool,
-        command: positional.join(" "),
+        command: commandPath(argv).join(" "),
         arguments: args,
         context:
           "A Slack agent for issue trackers and forges. The `command` field is the CLI verb path; " +

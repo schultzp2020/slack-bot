@@ -4,8 +4,8 @@ import { App } from "@slack/bolt";
 import type { Harness } from "@earendil-works/pi-durable";
 import { ADMINS, COMMANDS, type CommandConfig } from "./config.ts";
 import { context } from "./harness.ts";
-import { getWardenHoldScore, persistHoldScore, setWardenHoldScore } from "./extensions/warden.ts";
-import { BLANK_PING_TEXT, runTurn, stripMentions, type TurnDeps } from "./turn.ts";
+import { getWardenHoldScore, setWardenHoldScore } from "./extensions/warden.ts";
+import { runMention, runTurn, type TurnDeps } from "./turn.ts";
 
 // chisle: Bolt's listener-arg generics don't resolve under oxlint's type checker; typed structurally instead.
 interface CommandArgs {
@@ -90,8 +90,7 @@ async function handleWardenCommand(harness: Harness, args: CommandArgs): Promise
     if (!Number.isFinite(value) || value < 0 || value > 1) {
       message = "Give a threshold between 0 and 1, e.g. /warden 0.8.";
     } else {
-      setWardenHoldScore(value);
-      await persistHoldScore(harness, value);
+      await setWardenHoldScore(harness, value);
       message = `Warden hold threshold set to ${value} (persisted).`;
     }
   }
@@ -127,19 +126,12 @@ export async function createSlackApp(
       if (event.user === undefined) {
         return; // bot or system message
       }
-      const text = stripMentions(event.text);
-      // Blank ping: the user wants the bot to infer the next step from context.
-      const content = text !== "" ? text : BLANK_PING_TEXT;
-      // A root mention threads under itself (thread_ts ?? ts), so a Slack
-      // event retry continues the same conversation and the requestId
-      // (`slack:<ts>`) dedupes it instead of re-running every tool call.
-      await runTurn(deps, {
+      await runMention(deps, {
         channel: event.channel,
-        threadTs: event.thread_ts ?? event.ts,
-        text: content,
-        requestId: `slack:${event.ts}`,
-        requesterUserId: event.user,
-        sourceTs: event.ts,
+        ts: event.ts,
+        ...(event.thread_ts !== undefined ? { thread_ts: event.thread_ts } : {}),
+        text: event.text,
+        user: event.user,
       });
     } catch (error) {
       logger.error(error);

@@ -1,8 +1,11 @@
+// Skills interface tests: discovery, duplicate precedence, and file reads,
+// through the extension's own seam (createSkillsExtension over temp roots and
+// its registered tool), not the parser/scanner internals.
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { type Skill, parseFrontmatter, scanSkills } from "../src/extensions/skills.ts";
+import { createSkillsExtension } from "../src/extensions/skills.ts";
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -11,37 +14,85 @@ afterEach(() => {
   }
 });
 
-function skillDir(name: string, frontmatter: string): string {
+function skillRoot(entries: Record<string, string>): string {
   const root = mkdtempSync(join(tmpdir(), "skills-"));
   dirs.push(root);
-  mkdirSync(join(root, name));
-  writeFileSync(join(root, name, "SKILL.md"), `---\n${frontmatter}\n---\n\n# ${name}\n`);
+  for (const [name, body] of Object.entries(entries)) {
+    mkdirSync(join(root, name), { recursive: true });
+    writeFileSync(join(root, name, "SKILL.md"), body);
+  }
   return root;
 }
 
-describe("parseFrontmatter", () => {
-  it("reads name and description", () => {
-    const skill = parseFrontmatter("---\nname: a\ndescription: does a thing\n---\nbody", "/x");
-    expect(skill).toMatchObject({ name: "a", description: "does a thing", dir: "/x" });
-  });
+// Minimal stand-in for the tool execution api/context the skill tool ignores.
+const noApi = {} as never;
+const noContext = {} as never;
 
-  it("rejects missing fields or frontmatter", () => {
-    expect(parseFrontmatter("---\nname: a\n---\n", "/x")).toBeUndefined();
-    expect(parseFrontmatter("no frontmatter", "/x")).toBeUndefined();
-  });
-});
+/** The result's text blocks joined, for substring assertions. */
+function textOf(result: { output?: unknown[] }): string {
+  return (result.output ?? [])
+    .map((b) => (typeof b === "object" && b !== null && "text" in b ? String(b.text) : ""))
+    .join("\n");
+}
 
-describe("scanSkills", () => {
-  it("discovers nested skills, first name wins", () => {
-    const root = skillDir("alpha", "name: alpha\ndescription: first");
-    mkdirSync(join(root, "nested"));
-    mkdirSync(join(root, "nested", "beta"));
+function skillTool(roots: readonly string[]) {
+  const { tools } = createSkillsExtension(roots);
+  const [tool] = tools;
+  return tool;
+}
+
+describe("skills extension", () => {
+  it("discovers skills and reads SKILL.md and supporting files through the tool", async () => {
+    const root = mkdtempSync(join(tmpdir(), "skills-"));
+    dirs.push(root);
+    mkdirSync(join(root, "alpha"));
     writeFileSync(
-      join(root, "nested", "beta", "SKILL.md"),
-      "---\nname: beta\ndescription: nested\n---\n",
+      join(root, "alpha", "SKILL.md"),
+      "---\nname: alpha\ndescription: does a thing\n---\ninstructions",
     );
-    const out = new Map<string, Skill>();
-    scanSkills(root, out);
-    expect([...out.keys()]).toEqual(["alpha", "beta"]);
+    writeFileSync(join(root, "alpha", "helper.py"), "print('hi')");
+    const tool = skillTool([root]);
+    const doc = await tool.execute({ name: "alpha" }, noApi, noContext);
+    expect(doc.isError).toBeFalsy();
+    expect(textOf(doc)).toContain("instructions");
+    const helper = await tool.execute({ name: "alpha", path: "helper.py" }, noApi, noContext);
+    expect(textOf(helper)).toContain("print");
+  });
+
+  it("first discovery of a name wins, across roots and within a root", async () => {
+    const first = skillRoot({
+      dup: "---\nname: dup\ndescription: from first root\n---\nfirst",
+      nested: "---\nname: nested\ndescription: outer\n---\n",
+    });
+    // A same-named skill nested inside another skill dir, scanned after "dup"
+    // alphabetically? "nested" scans after "dup" either way; add an inner dup.
+    mkdirSync(join(first, "nested", "inner"));
+    writeFileSync(
+      join(first, "nested", "inner", "SKILL.md"),
+      "---\nname: nested\ndescription: shadowed, must lose\n---\n",
+    );
+    const second = skillRoot({ dup: "---\nname: dup\ndescription: from second root\n---\nsecond" });
+    const tool = skillTool([first, second]);
+    const dup = await tool.execute({ name: "dup" }, noApi, noContext);
+    expect(textOf(dup)).toContain("first");
+    const nested = await tool.execute({ name: "nested" }, noApi, noContext);
+    expect(textOf(nested)).toContain("outer");
+  });
+
+  it("rejects unknown names and paths escaping the skill directory", async () => {
+    const root = skillRoot({ alpha: "---\nname: alpha\ndescription: d\n---\nbody" });
+    const tool = skillTool([root]);
+    const unknown = await tool.execute({ name: "nope" }, noApi, noContext);
+    expect(unknown.isError).toBeTruthy();
+    const escape = await tool.execute({ name: "alpha", path: "../other/secret" }, noApi, noContext);
+    expect(escape.isError).toBeTruthy();
+  });
+
+  it("advertises discovered skills in its system-prompt section", () => {
+    const root = skillRoot({ alpha: "---\nname: alpha\ndescription: does a thing\n---\n" });
+    const { extension } = createSkillsExtension([root]);
+    const skillsSection = extension.sections?.find((s) => s.key === "skills");
+    const rendered = skillsSection?.render({} as never, noContext);
+    expect(rendered).toContain("alpha: does a thing");
   });
 });

@@ -3,6 +3,7 @@ import { spawn } from "node:child_process";
 import type { JsonObject } from "@earendil-works/pi-ai";
 import { defineExtension, defineTool } from "@earendil-works/pi-durable";
 import { Type } from "@earendil-works/pi-ai";
+import { commandPath } from "../util.ts";
 import { offlineFloors } from "./warden.ts";
 
 function runAcli(args: readonly string[]): Promise<string> {
@@ -35,15 +36,7 @@ offlineFloors.push((tool: string, args: JsonObject) => {
     return undefined;
   }
   const argv = Array.isArray(args.args) ? args.args.map(String) : [];
-  const positional: string[] = [];
-  for (let i = 0; i < argv.length; i++) {
-    if (argv[i].startsWith("--")) {
-      i++; // the flag and its value are query parameters, not the command
-      continue;
-    }
-    positional.push(argv[i].toLowerCase());
-  }
-  const path = positional.join(" ");
+  const path = commandPath(argv).join(" ");
   if (
     /\b(create|update|edit|delete|comment|transition|assign|link|move|close|reopen)\b/.test(path)
   ) {

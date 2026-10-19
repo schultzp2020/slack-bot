@@ -6,7 +6,8 @@
 import { defineDoc } from "@earendil-works/pi-durable";
 import type { ScheduleConfig } from "./config.ts";
 import { THREAD_TTL_MS } from "./config.ts";
-import { context, retireStaleThreads } from "./harness.ts";
+import { context } from "./harness.ts";
+import { retireStaleThreads } from "./threads.ts";
 import { runTurn, type TurnDeps } from "./turn.ts";
 
 const Schedules = defineDoc<{ lastRun: Record<string, number> }>({

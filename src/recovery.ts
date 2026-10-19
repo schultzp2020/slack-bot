@@ -8,18 +8,12 @@
 // the last committed watermark; the frontier only advances over messages
 // actually scanned.
 import type { AllMessageEvents } from "@slack/types";
+import { channelWatermarks, markChannelSeen } from "./harness.ts";
+import { recoveryThreadCursors } from "./threads.ts";
 import {
-  channelWatermarks,
-  markChannelSeen,
-  threadIndexSnapshot,
-  threadLastSeenTs,
-} from "./harness.ts";
-import {
-  BLANK_PING_TEXT,
   isHumanMessage,
   isMentionOfBot,
-  runTurn,
-  stripMentions,
+  runMention,
   type SlackClient,
   type TurnDeps,
 } from "./turn.ts";
@@ -49,32 +43,6 @@ export async function historySince(
   return messages.sort((a, b) => a.ts.localeCompare(b.ts));
 }
 
-/** Every mention in `messages`, oldest-first. */
-export function mentionsOfBot(
-  botUserId: string,
-  messages: readonly (AllMessageEvents & { text: string; ts: string; user: string })[],
-): (AllMessageEvents & { text: string; ts: string; user: string })[] {
-  return messages.filter((message) => isMentionOfBot(botUserId, message.text));
-}
-
-/** Run one recovered mention. */
-async function recoverMention(
-  deps: TurnDeps,
-  channel: string,
-  threadTs: string | undefined,
-  message: { text: string; ts: string; user: string },
-): Promise<void> {
-  const text = stripMentions(message.text);
-  await runTurn(deps, {
-    channel,
-    ...(threadTs !== undefined ? { threadTs } : {}),
-    text: text !== "" ? text : BLANK_PING_TEXT,
-    requestId: `slack:${message.ts}`,
-    requesterUserId: message.user,
-    sourceTs: message.ts,
-  });
-}
-
 export async function recoverMissedMentions(deps: TurnDeps): Promise<void> {
   const { harness, client, botUserId } = deps;
   const watermarks = await channelWatermarks(harness);
@@ -86,7 +54,15 @@ export async function recoverMissedMentions(deps: TurnDeps): Promise<void> {
         if (!isMentionOfBot(botUserId, message.text)) {
           continue;
         }
-        await recoverMention(deps, channel, (message as { thread_ts?: string }).thread_ts, message);
+        await runMention(deps, {
+          channel,
+          ts: message.ts,
+          ...("thread_ts" in message && message.thread_ts !== undefined
+            ? { thread_ts: message.thread_ts }
+            : {}),
+          text: message.text,
+          user: message.user,
+        });
       }
       // Advance only over scanned source messages, so a crash mid-sweep (or a
       // crash between two mentions) never skips unprocessed ones.
@@ -100,18 +76,12 @@ export async function recoverMissedMentions(deps: TurnDeps): Promise<void> {
   }
 
   // Thread replies are not part of channel history: sweep every mapped
-  // thread for mentions newer than its last-seen ts. (Mentions in threads the
-  // bot never joined are the remaining gap — those need a durable mention
-  // inbox, not a pull sweep.)
-  const threads = await threadIndexSnapshot(harness);
-  for (const [key, lastUsed] of Object.entries(threads)) {
-    const [channel, threadTs] = key.split(":");
-    if (channel === "" || threadTs === "" || !key.includes(":")) {
-      continue; // malformed key; threadKey always produces channel:ts
-    }
+  // thread from its recovery cursor. (Mentions in threads the bot never
+  // joined are the remaining gap — those need a durable mention inbox, not a
+  // pull sweep.)
+  const cursors = await recoveryThreadCursors(harness);
+  for (const { channel, threadTs, since } of cursors) {
     try {
-      const lastSeen = await threadLastSeenTs(harness, channel, threadTs);
-      const since = lastSeen > "0" ? lastSeen : lastUsed;
       const replies = await client.conversations.replies({
         channel,
         ts: threadTs,
@@ -122,10 +92,16 @@ export async function recoverMissedMentions(deps: TurnDeps): Promise<void> {
         if (!isHumanMessage(message) || !isMentionOfBot(botUserId, message.text)) {
           continue;
         }
-        await recoverMention(deps, channel, threadTs, message);
+        await runMention(deps, {
+          channel,
+          ts: message.ts,
+          thread_ts: threadTs,
+          text: message.text,
+          user: message.user,
+        });
       }
     } catch (error) {
-      console.error(`recovery sweep of thread ${key} failed:`, error);
+      console.error(`recovery sweep of thread ${channel}:${threadTs} failed:`, error);
     }
   }
 }

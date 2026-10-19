@@ -59,11 +59,15 @@ After every tool call, the result text is scored for prompt injection; at or abo
 
 ## Key source files
 
-| File              | Role                                                                                |
-| ----------------- | ----------------------------------------------------------------------------------- |
-| `src/index.ts`    | Entry point: lockfile, Harness open + resume, recovery sweep, Slack start, presence |
-| `src/harness.ts`  | Model gateway provider, extension discovery, thread→conversation map                |
-| `src/slack.ts`    | Bolt relay: mention handler, reconcile, steer, streaming placeholder                |
-| `src/extensions/` | One file per extension, default-exported, auto-installed                            |
-| `src/config.ts`   | All env-driven configuration                                                        |
-| `src/util.ts`     | Pure helpers (answer extraction, status lines, email linkifying)                    |
+| File               | Role                                                                                |
+| ------------------ | ----------------------------------------------------------------------------------- |
+| `src/index.ts`     | Entry point: lockfile, Harness open + resume, recovery sweep, Slack start, presence |
+| `src/harness.ts`   | Model gateway provider, extension discovery, channel watermarks                     |
+| `src/threads.ts`   | Thread→conversation map, recovery cursors, retirement (thread state)                |
+| `src/turn.ts`      | One agent turn + mention normalization (runTurn / runMention)                       |
+| `src/slack.ts`     | Bolt relay: mention handler, reconcile, steer, streaming placeholder                |
+| `src/recovery.ts`  | Startup sweep: channel history + thread replies since watermarks/cursors            |
+| `src/schedules.ts` | Configured daily prompts, claim-first, plus thread retirement tick                  |
+| `src/extensions/`  | One file per extension, default-exported, auto-installed                            |
+| `src/config.ts`    | All env-driven configuration                                                        |
+| `src/util.ts`      | Pure helpers (answer extraction, status lines, email linkifying)                    |

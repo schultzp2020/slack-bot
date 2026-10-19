@@ -49,3 +49,20 @@ export function liveStatusText(value: Readonly<LiveState> | null | undefined): s
 export function linkifyEmails(text: string): string {
   return text.replaceAll(/(?<![<>@\w])([\w.+-]+@[\w.-]+\.[a-z]{2,})(?![\w|>])/gi, "<mailto:$1|$1>");
 }
+
+/**
+ * The positional command path of an argv: every --flag and its value are
+ * query parameters, not actions, so they are skipped. Lowercased for
+ * verb matching.
+ */
+export function commandPath(argv: readonly string[]): string[] {
+  const positional: string[] = [];
+  for (let i = 0; i < argv.length; i++) {
+    if (argv[i].startsWith("--")) {
+      i++;
+      continue;
+    }
+    positional.push(argv[i].toLowerCase());
+  }
+  return positional;
+}
