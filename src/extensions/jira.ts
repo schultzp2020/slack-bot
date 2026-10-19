@@ -1,0 +1,58 @@
+// Jira access for the model: shells out to the Atlassian CLI (acli).
+import { spawn } from "node:child_process";
+import type { JsonObject } from "@earendil-works/pi-ai";
+import { defineExtension, defineTool } from "@earendil-works/pi-durable";
+import { Type } from "@earendil-works/pi-ai";
+import { offlineFloors } from "./warden.ts";
+
+function runAcli(args: readonly string[]): Promise<string> {
+  return new Promise((resolve) => {
+    const proc = spawn("acli", [...args], { shell: process.platform === "win32" });
+    let output = "";
+    proc.stdout.on("data", (chunk: string) => (output += chunk));
+    proc.stderr.on("data", (chunk: string) => (output += chunk));
+    proc.on("error", (error) => resolve(`acli failed to start: ${error.message}`));
+    proc.on("close", (code) => resolve(code === 0 ? output : `exit ${code}:\n${output}`));
+  });
+}
+
+export const jira = defineTool({
+  name: "jira",
+  description:
+    "Run an Atlassian CLI (acli) command, e.g. ['jira', 'issue', 'view', 'PROJ-123'] or " +
+    "['jira', 'work-item', 'list', '--jql', 'project = MYPROJECT']. Read-only use only.",
+  parameters: Type.Object({ args: Type.Array(Type.String()) }),
+  execute: async (args) => ({
+    output: [{ type: "text", text: (await runAcli(args.args)).slice(0, 30_000) }],
+  }),
+});
+
+// The warden's offline opinion for this tool. Only the command path counts:
+// flag values (--fields comment, --jql "...linkedIssues(...)") are query
+// parameters, not actions, so a write verb there must not read as a write.
+offlineFloors.push((tool: string, args: JsonObject) => {
+  if (tool !== "jira") {
+    return undefined;
+  }
+  const argv = Array.isArray(args.args) ? args.args.map(String) : [];
+  const positional: string[] = [];
+  for (let i = 0; i < argv.length; i++) {
+    if (argv[i].startsWith("--")) {
+      i++; // the flag and its value are query parameters, not the command
+      continue;
+    }
+    positional.push(argv[i].toLowerCase());
+  }
+  const path = positional.join(" ");
+  if (
+    /\b(create|update|edit|delete|comment|transition|assign|link|move|close|reopen)\b/.test(path)
+  ) {
+    return true;
+  }
+  if (/\b(view|list|search|show|get|describe|fields|help)\b/.test(path)) {
+    return false;
+  }
+  return undefined;
+});
+
+export default defineExtension({ name: "jira", tools: [jira] });

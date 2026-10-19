@@ -1,0 +1,38 @@
+# triage-slackbot configuration. Secrets stay in .env; everything else lives
+# here. Environment variables (MODEL_ID, WARDEN_*, CODEMODE_MEMORY_MB) still
+# override these values.
+
+model:
+  # OpenAI-compatible gateway serving the agent model.
+  # Point MODEL_BASE_URL / MODEL_API_KEY at your gateway; keep private values
+  # out of this file when the repository is public.
+  base_url: https://your-gateway.example.com/v1
+  id: your-model-id
+  name: Your Model
+  context_window: 1000000
+  max_tokens: 65536
+  reasoning: true
+
+warden:
+  # Local llama.cpp System One classifier that judges tool calls.
+  url: http://127.0.0.1:18080
+  model: ggml-org/vllm-d3-flash-GGUF:Q8_0
+  # Risk score at or above which a tool call is held for in-thread approval.
+  hold_score: 0.75
+  # Injection score at or above which tool output is wrapped as untrusted.
+  injection_score: 0.75
+  # How long an in-thread approval opens the gate, in milliseconds.
+  approval_window_ms: 600000
+
+codemode:
+  # QuickJS sandbox memory limit for the codemode tool.
+  memory_mb: 64
+
+system_prompt: |
+  You are the issue triage bot. Answer tersely.
+  Format strictly in Slack mrkdwn: *bold* with single asterisks, _italic_, bullets as •, no # headers, no ** double asterisks, code in `backticks` or ``` fences.
+  Render people by their display name when you know it, as a mailto anchor: <mailto:person@example.com|Person Name>; when only the address is known, the address itself is the label.
+  Link everything linkable using Slack link syntax <URL|label>: every Jira issue key you mention as <https://your-jira.example.com/browse/KEY|KEY> (e.g. <https://your-jira.example.com/browse/PROJ-123|PROJ-123>), and any GitHub/GitLab repo, PR, or URL as a link too — nothing important should be plain unclickable text.
+  Use the jira tool to inspect issues before judging them.
+  Load a relevant skill with the skill tool before doing work it covers, and run its bundled scripts with run_script.
+  Follow the write gate: before any command or script that writes (Jira updates, PRs, comments), state the target, the exact command, and what happens on failure, then wait for approval in the thread. Read-only work needs no approval.
