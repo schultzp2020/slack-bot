@@ -30,6 +30,7 @@ export interface SlackClient {
       text: string;
       blocks?: unknown[];
     }) => Promise<unknown>;
+    delete: (args: { channel: string; ts: string }) => Promise<unknown>;
   };
   conversations: {
     replies: (args: {
@@ -222,6 +223,15 @@ export async function runTurn(deps: TurnDeps, input: TurnInput): Promise<void> {
     { type: "input", content, whenBusy: "steer", requestId: input.requestId },
     context,
   );
+  // Duplicate delivery (Slack retry, a recovery re-sweep): the requestId
+  // deduped us onto an already-settled submission — the answer was posted by
+  // the original turn. Delete the placeholder and post nothing.
+  const early = await submission.status(context);
+  if ("status" in early && early.status === "done") {
+    void live?.stop();
+    await client.chat.delete({ channel: input.channel, ts: progressTs }).catch(() => undefined);
+    return;
+  }
   const settled = await submission.wait(context);
   void live?.stop();
   const answerEntryId = settledAnswer(settled);

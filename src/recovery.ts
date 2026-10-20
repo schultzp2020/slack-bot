@@ -18,7 +18,10 @@ import {
   type TurnDeps,
 } from "./turn.ts";
 
-/** Pull a channel's human messages after `since`, oldest-first, fully paginated. */
+/** Pull a channel's human messages strictly after `since` (Slack's `oldest`
+ * is inclusive of the boundary ts, so an exactly-equal message — the one the
+ * watermark records — would come back and be re-answered), oldest-first,
+ * fully paginated. */
 export async function historySince(
   client: SlackClient,
   channel: string,
@@ -34,7 +37,7 @@ export async function historySince(
       limit: 200,
     });
     for (const message of (page.messages ?? []) as unknown as AllMessageEvents[]) {
-      if (isHumanMessage(message)) {
+      if (isHumanMessage(message) && message.ts > since) {
         messages.push(message);
       }
     }
@@ -89,7 +92,12 @@ export async function recoverMissedMentions(deps: TurnDeps): Promise<void> {
         limit: 200,
       });
       for (const message of (replies.messages ?? []) as unknown as AllMessageEvents[]) {
-        if (!isHumanMessage(message) || !isMentionOfBot(botUserId, message.text)) {
+        // Strictly after `since`: the thread root carries a ts at or before
+        // every cursor, and Slack includes it in replies regardless of oldest.
+        if (!isHumanMessage(message) || message.ts <= since) {
+          continue;
+        }
+        if (!isMentionOfBot(botUserId, message.text)) {
           continue;
         }
         await runMention(deps, {
