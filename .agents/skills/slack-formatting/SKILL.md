@@ -22,6 +22,8 @@ Slack's `mrkdwn` is inspired by markdown but uses different rules. Where it appl
 - `*bold*` — bold text (single asterisks; `**` renders literally)
 - `~strike~` — strikethrough
 
+**Styles do not nest.** Slack mrkdwn picks one format per span: `*bold with `code` inside*` shows the markers literally, and `*<url|label>*` breaks the link — links are already visually styled, so never wrap them in bold or italics; bold the surrounding words instead. Inline code cannot sit inside bold.
+
 ## Line breaks
 
 Multi-line text works in app-published messages: include `\n` for a newline.
@@ -125,7 +127,8 @@ For structure beyond inline formatting — headers, side-by-side fields, dense d
 
 Notes for this bot:
 
-- Emit a blocks array as a fenced block tagged `slack-blocks`; the surrounding text becomes the fallback (see the show-me skill).
+- Emit a blocks array as a fenced block tagged `slack-blocks`. Prose outside the fence is preserved — the bot folds it into the message as section blocks before and after yours (Slack ignores the text field when blocks are present, so everything visible must be a block).
+- Keep ALL user-visible content in the reply: when you use a fence, the approval instructions and any closing notes must be either inside your blocks or in the surrounding prose, never assumed.
 - `header` takes `plain_text`, never `mrkdwn`.
 - `section.fields` renders mrkdwn pairs two-across; use for label/value pairs.
 - `context` holds footnote-level mrkdwn; `divider` separates sparingly.

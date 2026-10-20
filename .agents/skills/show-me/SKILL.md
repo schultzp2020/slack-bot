@@ -44,7 +44,7 @@ src/
 
 - Use `diff` when the point is what changes and the surrounding shape already exists. Match the diff shape to the topic — a component change, a file-layout change, a call-tree change, or a state change.
 
-- For anything richer than a fence can carry — a comparison table, a status board, a card layout, dense structured data — build Slack Block Kit instead of prose. Put the blocks as a JSON array in a fenced block tagged `slack-blocks`; the bot posts it as real blocks and the surrounding text becomes the fallback:
+- For anything richer than a fence can carry — a comparison table, a status board, a card layout, dense structured data — build Slack Block Kit instead of prose. Put the blocks as a JSON array in a fenced block tagged `slack-blocks`; the bot posts it as real blocks and folds your surrounding prose into the message as section blocks (Slack ignores plain text when blocks are present):
 
 ````
 ```slack-blocks

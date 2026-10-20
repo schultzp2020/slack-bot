@@ -312,3 +312,17 @@ describe("mentionUsers", () => {
     );
   });
 });
+
+describe("extractBlocks", () => {
+  it("splits prose around the fence; Slack drops non-block text otherwise", async () => {
+    const { extractBlocks } = await import("../src/util.ts");
+    const reply =
+      'intro line\n```slack-blocks\n[{"type":"section","text":{"type":"mrkdwn","text":"card"}}]\n```\nclosing line';
+    const split = extractBlocks(reply);
+    expect(split.before).toBe("intro line");
+    expect(split.after).toBe("closing line");
+    expect(split.blocks).toHaveLength(1);
+    // No fence: everything is prose.
+    expect(extractBlocks("just text")).toEqual({ blocks: [], before: "just text", after: "" });
+  });
+});

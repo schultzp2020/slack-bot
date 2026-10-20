@@ -240,15 +240,30 @@ export async function runTurn(deps: TurnDeps, input: TurnInput): Promise<void> {
         await conversation.commit((tx) => tx.entry(AssistantEntry, answerEntryId), context),
       )
     : `unanswered: ${"reason" in settled ? settled.reason : "unknown"}`;
-  // A ```slack-blocks fence in the reply becomes real Block Kit blocks; the
-  // rest is the text fallback. If Slack rejects the blocks, post text only.
-  // Emails that resolve to workspace members become @mentions.
-  const { blocks, text } = extractBlocks(reply);
-  const fallback = linkifyEmails(text).slice(0, 3900);
+  // A ```slack-blocks fence in the reply becomes real Block Kit blocks.
+  // Slack renders blocks and IGNORES the text field when blocks are present,
+  // so the prose around the fence must ride along as section blocks or it is
+  // lost — including approval instructions. The text stays as the fallback
+  // (notifications, and if Slack rejects the blocks). Emails that resolve to
+  // workspace members become @mentions.
+  const { blocks, before, after } = extractBlocks(reply);
+  const fallback = linkifyEmails(
+    `${before}${before !== "" && after !== "" ? "\n\n" : ""}${after}`,
+  ).slice(0, 3900);
   if (blocks.length > 0) {
+    const mentioned = await mentionUsers(deps.client.users, fallback);
+    const prose = (text: string) =>
+      text === ""
+        ? []
+        : [{ type: "section", text: { type: "mrkdwn", text: linkifyEmails(text).slice(0, 2900) } }];
     await client.chat
-      .update({ channel: input.channel, ts: progressTs, text: fallback, blocks })
-      .catch(() => client.chat.update({ channel: input.channel, ts: progressTs, text: fallback }));
+      .update({
+        channel: input.channel,
+        ts: progressTs,
+        text: mentioned,
+        blocks: [...prose(before), ...blocks, ...prose(after)],
+      })
+      .catch(() => client.chat.update({ channel: input.channel, ts: progressTs, text: mentioned }));
   } else {
     const mentioned = await mentionUsers(deps.client.users, fallback);
     await client.chat.update({ channel: input.channel, ts: progressTs, text: mentioned });

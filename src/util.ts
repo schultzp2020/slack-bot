@@ -80,23 +80,28 @@ export function commandPath(argv: readonly string[]): string[] {
  * blocks; the rest of the reply is the text fallback. Returns no blocks when
  * the fence is absent or the JSON does not parse as an array.
  */
-export function extractBlocks(reply: string): { blocks: unknown[]; text: string } {
+export function extractBlocks(reply: string): {
+  blocks: unknown[];
+  /** Prose before the fence — must ride along as a section block or Slack drops it. */
+  before: string;
+  /** Prose after the fence, same. */
+  after: string;
+} {
   const fence = /```slack-blocks\n([\s\S]*?)```/.exec(reply);
   if (fence === null) {
-    return { blocks: [], text: reply };
+    return { blocks: [], before: reply, after: "" };
   }
-  const stripped = (
-    reply.slice(0, fence.index) + reply.slice(fence.index + fence[0].length)
-  ).trim();
+  const before = reply.slice(0, fence.index).trim();
+  const after = reply.slice(fence.index + fence[0].length).trim();
   try {
     const parsed: unknown = JSON.parse(fence[1]);
     if (Array.isArray(parsed)) {
-      return { blocks: parsed, text: stripped };
+      return { blocks: parsed, before, after };
     }
   } catch {
     // fall through: not valid JSON, post as plain text
   }
-  return { blocks: [], text: reply };
+  return { blocks: [], before: reply, after: "" };
 }
 
 export interface UserLookup {
