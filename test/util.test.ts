@@ -72,7 +72,7 @@ describe("settledAnswer", () => {
 
 describe("liveStatusText", () => {
   it("shows thinking when nothing is live", () => {
-    expect(liveStatusText(undefined)).toBe("⏳ thinking…");
+    expect(liveStatusText(undefined)).toBe("🧠 thinking…");
   });
 
   it("lists tool rounds and partial answer text", () => {
@@ -80,7 +80,7 @@ describe("liveStatusText", () => {
       tools: [{ name: "jira", status: "running" }],
       generation: { message: { content: [{ type: "text", text: "so far" }] } },
     } as unknown as Parameters<typeof liveStatusText>[0];
-    expect(liveStatusText(value)).toBe("🔧 jira (running)\n\nso far");
+    expect(liveStatusText(value)).toBe("⚙️ *jira*\n\nso far");
   });
 });
 

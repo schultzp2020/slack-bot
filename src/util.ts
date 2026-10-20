@@ -28,8 +28,15 @@ export function liveStatusText(value: Readonly<LiveState> | null | undefined): s
   const lines: string[] = [];
   const tools = value?.tools ?? [];
   if (tools.length > 0) {
+    // Tool rounds as a mrkdwn list: bold names, emoji state, newest last.
     lines.push(
-      `🔧 ${tools.map((tool) => `${tool.name}${tool.status === "running" ? " (running)" : ""}`).join(", ")}`,
+      tools
+        .map((tool) => {
+          const marker = tool.status === "running" ? "⚙️" : tool.status === "done" ? "✅" : "•";
+          const name = tool.status === "running" ? `*${tool.name}*` : tool.name;
+          return `${marker} ${name}`;
+        })
+        .join("\n"),
     );
   }
   const partial = value?.generation?.message as
@@ -42,7 +49,7 @@ export function liveStatusText(value: Readonly<LiveState> | null | undefined): s
   if (text !== "") {
     lines.push(text);
   }
-  return lines.length > 0 ? lines.join("\n\n") : "⏳ thinking…";
+  return lines.length > 0 ? lines.join("\n\n") : "🧠 thinking…";
 }
 
 /** Wrap bare email addresses as Slack mailto anchors; leaves existing links alone. */

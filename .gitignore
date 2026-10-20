@@ -33,4 +33,5 @@ bot.log
 .agents/skills/*
 !.agents/skills/issue-triage/
 !.agents/skills/show-me/
+!.agents/skills/slack-formatting/
 .scratch/
