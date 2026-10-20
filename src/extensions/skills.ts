@@ -7,7 +7,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { SKILLS_ROOTS } from "../config.ts";
+import { SKILLS_ALWAYS_LOAD, SKILLS_ROOTS } from "../config.ts";
 import { Type } from "@earendil-works/pi-ai";
 import { parse } from "yaml";
 import type { JsonObject } from "@earendil-works/pi-ai";
@@ -104,12 +104,36 @@ export interface SkillsExtension {
  * name collisions). Discovery, lookup, and file reads live inside; callers
  * learn nothing about the filesystem layout.
  */
-export function createSkillsExtension(roots: readonly string[]): SkillsExtension {
+export function createSkillsExtension(
+  roots: readonly string[],
+  alwaysLoad: readonly string[] = [],
+): SkillsExtension {
   const byName = new Map<string, Skill>();
   for (const root of roots) {
     scanSkills(root, byName);
   }
   const skills = [...byName.values()];
+
+  // Preloaded skills: their SKILL.md body renders into the system prompt, so
+  // the model always knows their patterns without a skill-tool round-trip.
+  const preloaded: { name: string; body: string }[] = [];
+  for (const name of alwaysLoad) {
+    const skill = byName.get(name);
+    if (skill === undefined) {
+      continue; // not discovered under the configured roots
+    }
+    try {
+      const text = readFileSync(join(skill.dir, "SKILL.md"), "utf8");
+      // Strip the frontmatter; the body is the instruction content.
+      const body = text.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/u, "").trim();
+      if (body !== "") {
+        preloaded.push({ name, body });
+      }
+    } catch {
+      // unreadable skill file: nothing to preload
+    }
+  }
+  const preloadNames = new Set(preloaded.map((p) => p.name));
 
   const skillTool = defineTool({
     name: "skill",
@@ -164,8 +188,17 @@ export function createSkillsExtension(roots: readonly string[]): SkillsExtension
         skills.length === 0
           ? undefined
           : `Agent skills available — load one with the skill tool before doing work it covers; run its bundled scripts with the bash tool:\n${skills
+              .filter((skill: Skill) => !preloadNames.has(skill.name))
               .map((skill: Skill) => `- ${skill.name}: ${skill.description}`)
               .join("\n")}`,
+      ),
+      // Preloaded skills render after the advertisement, one section each,
+      // so their instructions are always in context.
+      ...preloaded.map((p) =>
+        section(
+          `skill-${p.name}`,
+          () => `Skill ${p.name} (already loaded — do not load it again):\n\n${p.body}`,
+        ),
       ),
     ],
   });
@@ -178,6 +211,7 @@ export function createSkillsExtension(roots: readonly string[]): SkillsExtension
 // location), then user skills.
 const installed = createSkillsExtension(
   SKILLS_ROOTS.map((root) => (root.startsWith("~") ? join(homedir(), root.slice(1)) : root)),
+  SKILLS_ALWAYS_LOAD,
 );
 
 export default installed.extension;

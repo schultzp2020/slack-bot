@@ -28,7 +28,7 @@ interface ConfigFile {
   threads: { ttl_days: number };
   commands?: CommandConfig[];
   jira_base_url?: string;
-  skills?: { roots?: string[] };
+  skills?: { roots?: string[]; always_load?: string[] };
   schedules?: ScheduleConfig[];
   system_prompt: string;
 }
@@ -111,6 +111,9 @@ export const JIRA_BASE_URL =
 
 /** Skill scan roots; earlier roots win on name collisions. `~` expands. */
 export const SKILLS_ROOTS: string[] = file.skills?.roots ?? [".agents/skills", "~/.agents/skills"];
+
+/** Skills whose SKILL.md body is always in the system prompt, no tool call needed. */
+export const SKILLS_ALWAYS_LOAD: string[] = file.skills?.always_load ?? [];
 
 // --- Prompt ----------------------------------------------------------------
 

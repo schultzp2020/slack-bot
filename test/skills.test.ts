@@ -100,6 +100,16 @@ describe("skills extension", () => {
     expect(escape.isError).toBeTruthy();
   });
 
+  it("preloads named skills into the system prompt and drops them from the advertisement", () => {
+    const root = skillRoot({ alpha: "---\nname: alpha\ndescription: d\n---\nALPHA INSTRUCTIONS" });
+    const { extension } = createSkillsExtension([root], ["alpha"]);
+    const sections = extension.sections ?? [];
+    const preloaded = sections.find((s) => s.key === "skill-alpha");
+    expect(preloaded?.render({} as never, noContext)).toContain("ALPHA INSTRUCTIONS");
+    const advertised = sections.find((s) => s.key === "skills");
+    expect(advertised?.render({} as never, noContext)).not.toContain("alpha:");
+  });
+
   it("advertises discovered skills in its system-prompt section", () => {
     const root = skillRoot({ alpha: "---\nname: alpha\ndescription: does a thing\n---\n" });
     const { extension } = createSkillsExtension([root]);
