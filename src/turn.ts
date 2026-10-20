@@ -6,7 +6,7 @@ import { AssistantEntry, LiveDoc, type Harness } from "@earendil-works/pi-durabl
 import { markChannelSeen, context } from "./harness.ts";
 import { markThreadSeen, openThread, threadLastSeenTs } from "./threads.ts";
 import { approvalCode, grantApproval, setTurnRequester } from "./extensions/warden.ts";
-import { answerText, linkifyEmails, liveStatusText, settledAnswer } from "./util.ts";
+import { answerText, extractBlocks, linkifyEmails, liveStatusText, settledAnswer } from "./util.ts";
 
 /** The Slack client methods a turn uses. */
 export interface SlackClient {
@@ -15,8 +15,14 @@ export interface SlackClient {
       channel: string;
       thread_ts?: string;
       text: string;
+      blocks?: unknown[];
     }) => Promise<{ ts?: string }>;
-    update: (args: { channel: string; ts: string; text: string }) => Promise<unknown>;
+    update: (args: {
+      channel: string;
+      ts: string;
+      text: string;
+      blocks?: unknown[];
+    }) => Promise<unknown>;
   };
   conversations: {
     replies: (args: {
@@ -214,11 +220,17 @@ export async function runTurn(deps: TurnDeps, input: TurnInput): Promise<void> {
         await conversation.commit((tx) => tx.entry(AssistantEntry, answerEntryId), context),
       )
     : `unanswered: ${"reason" in settled ? settled.reason : "unknown"}`;
-  await client.chat.update({
-    channel: input.channel,
-    ts: progressTs,
-    text: linkifyEmails(reply).slice(0, 3900),
-  });
+  // A ```slack-blocks fence in the reply becomes real Block Kit blocks; the
+  // rest is the text fallback. If Slack rejects the blocks, post text only.
+  const { blocks, text } = extractBlocks(reply);
+  const fallback = linkifyEmails(text).slice(0, 3900);
+  if (blocks.length > 0) {
+    await client.chat
+      .update({ channel: input.channel, ts: progressTs, text: fallback, blocks })
+      .catch(() => client.chat.update({ channel: input.channel, ts: progressTs, text: fallback }));
+  } else {
+    await client.chat.update({ channel: input.channel, ts: progressTs, text: fallback });
+  }
 
   // Advance the channel watermark to the SOURCE event ts (never the
   // placeholder's, which is newer than unprocessed offline events), so the

@@ -5,7 +5,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { createSkillsExtension } from "../src/extensions/skills.ts";
+import { createSkillsExtension, parseFrontmatter } from "../src/extensions/skills.ts";
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -77,6 +77,18 @@ describe("skills extension", () => {
     expect(textOf(dup)).toContain("first");
     const nested = await tool.execute({ name: "nested" }, noApi, noContext);
     expect(textOf(nested)).toContain("outer");
+  });
+
+  it("parses block-scalar descriptions, as in real-world skills", () => {
+    const skill = parseFrontmatter(
+      "---\nname: humanizer\ndescription: |\n  Rewrite AI-sounding text so it reads like the writer.\n  Use when editing prose for AI tells.\nlicense: MIT\n---\nbody",
+      "/x",
+    );
+    expect(skill).toMatchObject({
+      name: "humanizer",
+      description:
+        "Rewrite AI-sounding text so it reads like the writer. Use when editing prose for AI tells.",
+    });
   });
 
   it("rejects unknown names and paths escaping the skill directory", async () => {

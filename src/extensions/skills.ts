@@ -8,6 +8,7 @@ import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { Type } from "@earendil-works/pi-ai";
+import { parse } from "yaml";
 import {
   defineExtension,
   defineTool,
@@ -22,25 +23,35 @@ export interface Skill {
   dir: string;
 }
 
-/** Parse the subset of frontmatter we route on: single-line name and description. */
+/** Parse the frontmatter we route on (name, description) with a real YAML
+ * parser — skill frontmatter is YAML by spec, including `|` block-scalar
+ * descriptions. Malformed frontmatter means the skill is skipped. */
 export function parseFrontmatter(text: string, dir: string): Skill | undefined {
   const match = /^---\r?\n([\s\S]*?)\r?\n---/.exec(text);
   if (match === null) {
     return undefined;
   }
-  const fields = new Map<string, string>();
-  for (const line of match[1].split(/\r?\n/)) {
-    const kv = /^([a-z][a-z-]*):\s*(.*)$/.exec(line);
-    if (kv !== null) {
-      fields.set(kv[1], kv[2]);
-    }
-  }
-  const name = fields.get("name");
-  const description = fields.get("description");
-  if (name === undefined || description === undefined) {
+  let fields: unknown;
+  try {
+    fields = parse(match[1]);
+  } catch {
     return undefined;
   }
-  return { name, description, dir };
+  if (typeof fields !== "object" || fields === null) {
+    return undefined;
+  }
+  const { name, description } = fields as { name?: unknown; description?: unknown };
+  if (typeof name !== "string" || name === "") {
+    return undefined;
+  }
+  if (typeof description !== "string") {
+    return undefined;
+  }
+  const folded = description.replaceAll(/\s+/gu, " ").trim(); // block scalars fold to one line
+  if (folded === "") {
+    return undefined;
+  }
+  return { name, description: folded, dir };
 }
 
 /**

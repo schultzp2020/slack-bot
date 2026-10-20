@@ -32,4 +32,5 @@ bot.log
 # Skills: authored skills are tracked; cloned packs are not.
 .agents/skills/*
 !.agents/skills/issue-triage/
+!.agents/skills/show-me/
 .scratch/
