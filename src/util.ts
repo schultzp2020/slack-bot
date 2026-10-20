@@ -115,14 +115,10 @@ export function chunkText(text: string, max = 3800): string[] {
   let rest = text;
   while (rest.length > max) {
     const window = rest.slice(0, max);
-    const cut = Math.max(
-      window.lastIndexOf("\n\n"),
-      window.lastIndexOf("\n"),
-      window.lastIndexOf(" "),
-    );
-    const at = cut > 0 ? cut : max;
-    chunks.push(rest.slice(0, at).trim());
-    rest = rest.slice(at).trim();
+    const cut = Math.max(window.lastIndexOf("\n"), window.lastIndexOf(" "));
+    const at = cut > 0 ? cut + 1 : max; // include the separator in the chunk
+    chunks.push(rest.slice(0, at));
+    rest = rest.slice(at);
   }
   if (rest !== "") {
     chunks.push(rest);

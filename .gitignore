@@ -35,3 +35,4 @@ bot.log
 !.agents/skills/show-me/
 !.agents/skills/slack-formatting/
 .scratch/
+skills-lock.json

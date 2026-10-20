@@ -331,21 +331,19 @@ describe("message splitting", () => {
   it("chunks long text at paragraph boundaries, never mid-link", async () => {
     const { chunkText } = await import("../src/util.ts");
     const para = "word ".repeat(100).trim(); // 500 chars
-    const long = [para, para, para, para, para, para, para, para, para].join("
-
-"); // 4500+
+    const long = [para, para, para, para, para, para, para, para, para].join("\n\n"); // 4500+
     const chunks = chunkText(long, 1800);
     expect(chunks.length).toBeGreaterThan(1);
     for (const chunk of chunks) {
       expect(chunk.length).toBeLessThanOrEqual(1800);
     }
-    expect(chunks.join("\n\n")).toBe(long);
+    // Separators ride with their chunk: joining reproduces the text exactly.
+    expect(chunks.join("")).toBe(long);
   });
 
   it("splits oversized section blocks and batches by block count", async () => {
     const { splitBlocks } = await import("../src/util.ts");
-    const bigText = "line
-".repeat(700); // 3500 chars
+    const bigText = "line\n".repeat(700); // 3500 chars
     const blocks = [{ type: "section", text: { type: "mrkdwn", text: bigText } }];
     const batches = splitBlocks(blocks, 2800, 40);
     expect(batches.length).toBe(1);
@@ -356,7 +354,10 @@ describe("message splitting", () => {
     }
     expect(sections.map((s) => s.text.text).join("")).toBe(bigText);
     // Many blocks batch into several messages.
-    const many = Array.from({ length: 90 }, (_, i) => ({ type: "section", text: { type: "mrkdwn", text: `b${i}` } }));
+    const many = Array.from({ length: 90 }, (_, i) => ({
+      type: "section",
+      text: { type: "mrkdwn", text: `b${i}` },
+    }));
     expect(splitBlocks(many, 2800, 40).length).toBe(3);
   });
 });
