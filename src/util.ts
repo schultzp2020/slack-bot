@@ -91,3 +91,46 @@ export function extractBlocks(reply: string): { blocks: unknown[]; text: string 
   }
   return { blocks: [], text: reply };
 }
+
+export interface UserLookup {
+  lookupByEmail: (email: string) => Promise<{ user?: { id?: string } } | undefined>;
+}
+
+/**
+ * Replace email references (mailto links and bare addresses) with Slack user
+ * mentions when the address resolves to a workspace member; unresolved
+ * addresses keep their mailto link. Lookups are cached per call.
+ */
+export async function mentionUsers(lookup: UserLookup, text: string): Promise<string> {
+  const emails = new Set<string>();
+  for (const m of text.matchAll(/<mailto:([^|>]+)[^>]*>/g)) {
+    emails.add(m[1].toLowerCase());
+  }
+  for (const m of text.matchAll(/(?<![<>@\w])([\w.+-]+@[\w.-]+\.[a-z]{2,})(?![\w|>])/gi)) {
+    emails.add(m[1].toLowerCase());
+  }
+  const mentions = new Map<string, string>();
+  for (const email of emails) {
+    try {
+      const found = await lookup.lookupByEmail(email);
+      const id = found?.user?.id;
+      if (id !== undefined && id !== "") {
+        mentions.set(email, `<@${id}>`);
+      }
+    } catch {
+      // not a workspace member or lookup failed: keep the mailto link
+    }
+  }
+  if (mentions.size === 0) {
+    return text;
+  }
+  return text
+    .replaceAll(
+      /<mailto:([^|>]+)(\|[^>]*)?>/g,
+      (full, email: string) => mentions.get(email.toLowerCase()) ?? full,
+    )
+    .replaceAll(
+      /(?<![<>@\w])([\w.+-]+@[\w.-]+\.[a-z]{2,})(?![\w|>])/gi,
+      (full, email: string) => mentions.get(email.toLowerCase()) ?? full,
+    );
+}

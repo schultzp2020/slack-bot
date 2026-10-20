@@ -27,6 +27,8 @@ interface ConfigFile {
   codemode: { memory_mb: number };
   threads: { ttl_days: number };
   commands?: CommandConfig[];
+  jira_base_url?: string;
+  skills?: { roots?: string[] };
   schedules?: ScheduleConfig[];
   system_prompt: string;
 }
@@ -101,6 +103,15 @@ export const COMMANDS: CommandConfig[] = file.commands ?? [];
 /** Scheduled turns; a run missed while the bot was down is caught up on startup. */
 export const SCHEDULES: ScheduleConfig[] = file.schedules ?? [];
 
+// --- Tracker links and skill roots -------------------------------------------
+
+/** Base URL for linking issue keys; overridden by JIRA_BASE_URL in .env. */
+export const JIRA_BASE_URL =
+  process.env.JIRA_BASE_URL ?? file.jira_base_url ?? "https://your-jira.example.com";
+
+/** Skill scan roots; earlier roots win on name collisions. `~` expands. */
+export const SKILLS_ROOTS: string[] = file.skills?.roots ?? [".agents/skills", "~/.agents/skills"];
+
 // --- Prompt ----------------------------------------------------------------
 
-export const SYSTEM_PROMPT = file.system_prompt;
+export const SYSTEM_PROMPT = file.system_prompt.replaceAll("{{jira_base_url}}", JIRA_BASE_URL);

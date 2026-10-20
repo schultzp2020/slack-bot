@@ -6,7 +6,14 @@ import { AssistantEntry, LiveDoc, type Harness } from "@earendil-works/pi-durabl
 import { markChannelSeen, context } from "./harness.ts";
 import { markThreadSeen, openThread, threadLastSeenTs } from "./threads.ts";
 import { approvalCode, grantApproval, setTurnRequester } from "./extensions/warden.ts";
-import { answerText, extractBlocks, linkifyEmails, liveStatusText, settledAnswer } from "./util.ts";
+import {
+  answerText,
+  extractBlocks,
+  linkifyEmails,
+  liveStatusText,
+  mentionUsers,
+  settledAnswer,
+} from "./util.ts";
 
 /** The Slack client methods a turn uses. */
 export interface SlackClient {
@@ -41,6 +48,9 @@ export interface SlackClient {
       has_more?: boolean;
       response_metadata?: { next_cursor?: string };
     }>;
+  };
+  users: {
+    lookupByEmail: (email: string) => Promise<{ user?: { id?: string } } | undefined>;
   };
 }
 
@@ -222,6 +232,7 @@ export async function runTurn(deps: TurnDeps, input: TurnInput): Promise<void> {
     : `unanswered: ${"reason" in settled ? settled.reason : "unknown"}`;
   // A ```slack-blocks fence in the reply becomes real Block Kit blocks; the
   // rest is the text fallback. If Slack rejects the blocks, post text only.
+  // Emails that resolve to workspace members become @mentions.
   const { blocks, text } = extractBlocks(reply);
   const fallback = linkifyEmails(text).slice(0, 3900);
   if (blocks.length > 0) {
@@ -229,7 +240,8 @@ export async function runTurn(deps: TurnDeps, input: TurnInput): Promise<void> {
       .update({ channel: input.channel, ts: progressTs, text: fallback, blocks })
       .catch(() => client.chat.update({ channel: input.channel, ts: progressTs, text: fallback }));
   } else {
-    await client.chat.update({ channel: input.channel, ts: progressTs, text: fallback });
+    const mentioned = await mentionUsers(deps.client.users, fallback);
+    await client.chat.update({ channel: input.channel, ts: progressTs, text: mentioned });
   }
 
   // Advance the channel watermark to the SOURCE event ts (never the

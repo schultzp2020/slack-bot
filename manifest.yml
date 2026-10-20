@@ -14,6 +14,7 @@ oauth_config:
       - chat:write
       - channels:history
       - users:write
+      - users:read.email
   slash_commands:
     - command: /triage
       description: Triage tracker issues

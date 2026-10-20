@@ -280,3 +280,35 @@ describe("normalizeMention", () => {
     expect(reply.text).toContain("pinged you with no message");
   });
 });
+
+describe("offline floors for read-only navigation", () => {
+  it("vouches the skill tool and bare jira subcommands read-only", async () => {
+    await import("../src/extensions/jira.ts"); // registers its floor
+    await import("../src/extensions/skills.ts"); // registers its floor
+    const { obviouslyReadOnly, offlineWriteShaped } = await import("../src/extensions/warden.ts");
+    // The exact calls held offline in the wild: a skill load and a --help lookup.
+    expect(obviouslyReadOnly("skill", { name: "rhdh-jira-api" })).toBeTruthy();
+    expect(obviouslyReadOnly("jira", { args: ["jira", "workitem", "--help"] })).toBeTruthy();
+    expect(offlineWriteShaped("skill", { name: "x" })).toBeFalsy();
+    expect(offlineWriteShaped("jira", { args: ["jira", "workitem"] })).toBeFalsy();
+    // Writes still hold offline.
+    expect(
+      offlineWriteShaped("jira", { args: ["jira", "workitem", "comment", "add", "X-1", "text"] }),
+    ).toBeTruthy();
+  });
+});
+
+describe("mentionUsers", () => {
+  it("replaces mailto links and bare emails with member mentions, keeps others", async () => {
+    const { mentionUsers } = await import("../src/util.ts");
+    const lookup = async (email: string) =>
+      email === "known@example.com"
+        ? { user: { id: "U123" } }
+        : Promise.reject(new Error("not found"));
+    const text =
+      "assigned to <mailto:known@example.com|known@example.com> and cc <mailto:bare@nope.org|bare@nope.org>";
+    expect(await mentionUsers({ lookupByEmail: lookup }, text)).toBe(
+      "assigned to <@U123> and cc <mailto:bare@nope.org|bare@nope.org>",
+    );
+  });
+});

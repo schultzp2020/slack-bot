@@ -31,6 +31,8 @@ export const jira = defineTool({
 // The warden's offline opinion for this tool. Only the command path counts:
 // flag values (--fields comment, --jql "...linkedIssues(...)") are query
 // parameters, not actions, so a write verb there must not read as a write.
+// A path with no verb at all ("jira workitem", "jira workitem --help") only
+// navigates or prints help — reading, not writing.
 offlineFloors.push((tool: string, args: JsonObject) => {
   if (tool !== "jira") {
     return undefined;
@@ -45,7 +47,8 @@ offlineFloors.push((tool: string, args: JsonObject) => {
   if (/\b(view|list|search|show|get|describe|fields|help)\b/.test(path)) {
     return false;
   }
-  return undefined;
+  // No verb matched: bare navigation or help, which cannot change state.
+  return false;
 });
 
 export default defineExtension({ name: "jira", tools: [jira] });

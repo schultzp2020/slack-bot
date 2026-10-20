@@ -4,7 +4,7 @@ import { App } from "@slack/bolt";
 import type { Harness } from "@earendil-works/pi-durable";
 import { COMMANDS, type CommandConfig } from "./config.ts";
 import { context } from "./harness.ts";
-import { runMention, runTurn, type TurnDeps } from "./turn.ts";
+import { runMention, runTurn, type SlackClient, type TurnDeps } from "./turn.ts";
 
 // chisle: Bolt's listener-arg generics don't resolve under oxlint's type checker; typed structurally instead.
 interface CommandArgs {
@@ -91,7 +91,9 @@ export async function createSlackApp(
   const botUserId = auth.user_id ?? "";
   const deps: TurnDeps = {
     harness,
-    client: slack.client,
+    // chisle: bolt's WebClient satisfies this structurally, but the union of
+    // overloads degrades under tsgolint; the cast is load-bearing.
+    client: slack.client as unknown as SlackClient,
     botUserId,
   };
 

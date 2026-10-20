@@ -7,8 +7,10 @@ import { readFileSync, readdirSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { SKILLS_ROOTS } from "../config.ts";
 import { Type } from "@earendil-works/pi-ai";
 import { parse } from "yaml";
+import type { JsonObject } from "@earendil-works/pi-ai";
 import {
   defineExtension,
   defineTool,
@@ -16,6 +18,14 @@ import {
   type Extension,
   type ToolRegistration,
 } from "@earendil-works/pi-durable";
+import { offlineFloors } from "./warden.ts";
+
+// The warden's offline opinion: the skill tool only reads files inside a
+// skill's own directory, so it vouches read-only and never needs approval.
+offlineFloors.push((tool: string, _args: JsonObject) => {
+  void _args;
+  return tool === "skill" ? false : undefined;
+});
 
 export interface Skill {
   name: string;
@@ -163,8 +173,11 @@ export function createSkillsExtension(roots: readonly string[]): SkillsExtension
   return { extension, tools: [skillTool] };
 }
 
-// The installed extension: project skills first (Pi-compatible location), then
-// user skills; project skills shadow user skills with the same name.
-const installed = createSkillsExtension([".agents/skills", join(homedir(), ".agents", "skills")]);
+// The installed extension over the configured scan roots (earlier roots win
+// on name collisions). Defaults: project skills first (Pi-compatible
+// location), then user skills.
+const installed = createSkillsExtension(
+  SKILLS_ROOTS.map((root) => (root.startsWith("~") ? join(homedir(), root.slice(1)) : root)),
+);
 
 export default installed.extension;
