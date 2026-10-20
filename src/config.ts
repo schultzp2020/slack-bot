@@ -14,15 +14,18 @@ interface ConfigFile {
     reasoning: boolean;
   };
   warden: {
-    url: string;
-    model: string;
+    classifier: {
+      backend: "llama-cpp" | "openai" | "jev";
+      url: string;
+      model: string;
+      api_key_env?: string;
+    };
     hold_score: number;
     injection_score: number;
     approval_window_ms: number;
   };
   codemode: { memory_mb: number };
   threads: { ttl_days: number };
-  admins?: string[];
   commands?: CommandConfig[];
   schedules?: ScheduleConfig[];
   system_prompt: string;
@@ -54,10 +57,24 @@ export const MODEL_REASONING = file.model.reasoning;
 
 // --- Warden (local-classifier approval gate) -------------------------------
 
-/** Local llama.cpp System One classifier server. */
-export const WARDEN_URL = process.env.WARDEN_URL ?? file.warden.url;
+/** Which classifier backend judges tool calls: a local llama-server, an OpenAI-compatible endpoint, or Typesafe Jev. */
+export type WardenBackend = "llama-cpp" | "openai" | "jev";
+
+/** The configured classifier backend. */
+export const WARDEN_BACKEND = (process.env.WARDEN_BACKEND ??
+  file.warden.classifier.backend) as WardenBackend;
+
+/** Classifier server root: a llama-server root for llama-cpp, the API base (including /v1) for openai/jev. */
+export const WARDEN_URL = process.env.WARDEN_URL ?? file.warden.classifier.url;
+
 /** Served classifier model id. */
-export const WARDEN_MODEL = process.env.WARDEN_MODEL ?? file.warden.model;
+export const WARDEN_MODEL = process.env.WARDEN_MODEL ?? file.warden.classifier.model;
+
+/** API key for remote backends (openai, jev); undefined for local llama-cpp. */
+export const WARDEN_API_KEY: string | undefined =
+  WARDEN_BACKEND === "llama-cpp"
+    ? undefined
+    : process.env[file.warden.classifier.api_key_env ?? "WARDEN_API_KEY"];
 /** Risk score at or above which a tool call is held for in-thread approval. */
 export const WARDEN_HOLD_SCORE = Number(process.env.WARDEN_HOLD_SCORE ?? file.warden.hold_score);
 /** Injection score at or above which tool output is wrapped as untrusted. */
@@ -80,9 +97,6 @@ export const CODEMODE_MEMORY_LIMIT_BYTES =
 
 /** Slash commands: /name [text] runs the preset prompt. Also declare each in manifest.yml. */
 export const COMMANDS: CommandConfig[] = file.commands ?? [];
-
-/** Slack user IDs allowed to change security settings (/warden setter). */
-export const ADMINS: string[] = file.admins ?? [];
 
 /** Scheduled turns; a run missed while the bot was down is caught up on startup. */
 export const SCHEDULES: ScheduleConfig[] = file.schedules ?? [];

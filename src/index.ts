@@ -7,7 +7,6 @@ import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { SCHEDULES } from "./config.ts";
 import { createRuntimeModels, createRuntimeRegistry, context } from "./harness.ts";
-import { loadPersistedHoldScore } from "./extensions/warden.ts";
 import { recoverMissedMentions } from "./recovery.ts";
 import { startSchedules } from "./schedules.ts";
 import { createSlackApp } from "./slack.ts";
@@ -53,7 +52,6 @@ export async function main() {
     context,
   );
   harness.resume(); // continue runs the last process left unfinished
-  await loadPersistedHoldScore(harness); // a /warden change survives restarts
 
   const { slack, setStatus, deps } = await createSlackApp(harness);
   // Sweep BEFORE connecting: live traffic must not advance the channel

@@ -61,10 +61,10 @@ The PID lockfile (`data/bot.lock`) refuses a second instance while one is live, 
 If read-only calls get held (false positives) or writes slip through (false negatives):
 
 1. Check the held call's score in the block message (e.g. "scored it 0.80").
-2. Tune the threshold live with `/warden 0.8` — Slack user IDs in the `admins` list of `config.yaml` only; the change is persisted across restarts. Reading it (`/warden`) is open to everyone.
+2. Tune `warden.hold_score` in `config.yaml` (default `0.9`) — or `WARDEN_HOLD_SCORE` in `.env` — and restart.
 3. For systematic false positives on your tool's read paths, fix its offline floor so those calls return `false` and skip the classifier entirely. (The coding tools deliberately never vouch.)
 
-The default threshold is `WARDEN_HOLD_SCORE` in `.env` (or `warden.hold_score` in `config.yaml`). The classifier itself is your local llama.cpp server (`WARDEN_URL`, default `http://127.0.0.1:18080`). If it is down, the warden falls back to the offline floors and holds anything without a read-only opinion — fail closed.
+The judge itself is configured under `warden.classifier` in `config.yaml`: `llama-cpp` (local llama-server, default), `openai` (OpenAI-compatible Decisions endpoint), or `jev` (Typesafe Jev) — the latter two need `WARDEN_API_KEY`. If the classifier is unreachable, the warden falls back to the offline floors and holds anything without a read-only opinion — fail closed.
 
 ## Run the checks
 

@@ -14,11 +14,21 @@ model:
   reasoning: true
 
 warden:
-  # Local llama.cpp System One classifier that judges tool calls.
-  url: http://127.0.0.1:18080
-  model: ggml-org/vllm-d3-flash-GGUF:Q8_0
+  # The classifier that judges tool calls. Backends:
+  #   llama-cpp: a local llama-server (System One-shaped). url is the server
+  #              root; no API key needed.
+  #   openai:    an OpenAI-compatible Decisions endpoint. url is the API base
+  #              including /v1; needs the API key below.
+  #   jev:       Typesafe Jev (System One). url is the API base including /v1;
+  #              needs the API key below.
+  classifier:
+    backend: llama-cpp
+    url: http://127.0.0.1:18080
+    model: ggml-org/vllm-d3-flash-GGUF:Q8_0
+    # Env var holding the API key for remote backends (openai, jev).
+    api_key_env: WARDEN_API_KEY
   # Risk score at or above which a tool call is held for in-thread approval.
-  hold_score: 0.75
+  hold_score: 0.9
   # Injection score at or above which tool output is wrapped as untrusted.
   injection_score: 0.75
   # How long an in-thread approval opens the gate, in milliseconds.

@@ -240,18 +240,6 @@ describe("schedule occurrences", () => {
   });
 });
 
-describe("warden threshold setter", () => {
-  it("persists first: a failed write leaves the previous threshold in effect", async () => {
-    const { getWardenHoldScore, setWardenHoldScore } = await import("../src/extensions/warden.ts");
-    const before = getWardenHoldScore();
-    const failingHarness = {
-      commit: () => Promise.reject(new Error("storage down")),
-    };
-    await expect(setWardenHoldScore(failingHarness, 0.11)).rejects.toThrow("storage down");
-    expect(getWardenHoldScore()).toBe(before);
-  });
-});
-
 describe("commandPath", () => {
   it("keeps the positional path, skipping flags and their values", async () => {
     const { commandPath } = await import("../src/util.ts");

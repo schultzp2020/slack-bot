@@ -12,7 +12,7 @@ Settings live in `config.yaml` (model, warden thresholds, codemode limits, the s
 | `SLACK_APP_TOKEN` | App-level token with `connections:write`, `xapp-…` (required) |
 | `MODEL_API_KEY`   | Key for the model gateway (required)                          |
 
-Environment variables override `config.yaml` where noted in `.env.example`: `MODEL_ID`, `WARDEN_URL`, `WARDEN_MODEL`, `WARDEN_HOLD_SCORE`, `WARDEN_INJECTION_SCORE`, `CODEMODE_MEMORY_MB`.
+Environment variables override `config.yaml` where noted in `.env.example`: `MODEL_ID`, `WARDEN_BACKEND`, `WARDEN_URL`, `WARDEN_MODEL`, `WARDEN_HOLD_SCORE`, `WARDEN_INJECTION_SCORE`, `CODEMODE_MEMORY_MB`; `WARDEN_API_KEY` supplies the key for remote classifier backends.
 
 ## Tools offered to the model
 
@@ -27,6 +27,14 @@ Environment variables override `config.yaml` where noted in `.env.example`: `MOD
 The coding tools are general-purpose by design (skill scripts run through `bash`), and the warden is the security boundary: every coding-tool call is classified, none has a read-only shortcut, and secret files (`.env`, `data/`, `.git`) are hard-denied before classification — they never enter model context, even with an approval.
 
 ## The warden (`src/extensions/warden.ts`)
+
+The judge is any System One-shaped classifier, chosen in `warden.classifier.backend`:
+
+- `llama-cpp` — a local llama-server; `url` is the server root, no key.
+- `openai` — an OpenAI-compatible Decisions endpoint; `url` is the API base including `/v1`, needs `WARDEN_API_KEY`.
+- `jev` — Typesafe Jev; `url` is the API base including `/v1`, needs `WARDEN_API_KEY`.
+
+Backends are a table (`CLASSIFIER_BACKENDS` in warden.ts): wire api, URL derivation, lazy loader. Adding one is a row; nothing else in the warden knows which is configured.
 
 Before every tool call, in order:
 
@@ -46,7 +54,7 @@ After every tool call, the result text is scored for prompt injection; at or abo
 
 ## Storage
 
-- `data/session.sqlite` — all durable state: conversations, entries, tool results, thread map (`app.slack_threads`), thread index (`app.thread_index`), channel watermarks (`app.channels`), schedules (`app.schedules`), team memory (`app.memory`), warden settings (`app.warden_settings`). One process at a time (PID lockfile `data/bot.lock`).
+- `data/session.sqlite` — all durable state: conversations, entries, tool results, thread map (`app.slack_threads`), thread index (`app.thread_index`), channel watermarks (`app.channels`), schedules (`app.schedules`), team memory (`app.memory`). One process at a time (PID lockfile `data/bot.lock`).
 - `.agents/skills/` — project skills (gitignored checkouts of skills packs live here), scanned alongside `~/.agents/skills`.
 
 ## npm scripts

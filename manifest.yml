@@ -21,8 +21,6 @@ oauth_config:
       description: Assess whether issues are ready to move forward
     - command: /stats
       description: Show usage and cost totals
-    - command: /warden
-      description: Read or set the warden hold threshold
 settings:
   socket_mode_enabled: true
   event_subscriptions:

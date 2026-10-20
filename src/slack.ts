@@ -2,9 +2,8 @@
 import type { AppMentionEvent } from "@slack/types";
 import { App } from "@slack/bolt";
 import type { Harness } from "@earendil-works/pi-durable";
-import { ADMINS, COMMANDS, type CommandConfig } from "./config.ts";
+import { COMMANDS, type CommandConfig } from "./config.ts";
 import { context } from "./harness.ts";
-import { getWardenHoldScore, setWardenHoldScore } from "./extensions/warden.ts";
 import { runMention, runTurn, type TurnDeps } from "./turn.ts";
 
 // chisle: Bolt's listener-arg generics don't resolve under oxlint's type checker; typed structurally instead.
@@ -76,27 +75,6 @@ async function handleStatsCommand(harness: Harness, args: CommandArgs): Promise<
   });
 }
 
-/** /warden logic, at module scope so no Bolt generic inference is involved. */
-async function handleWardenCommand(harness: Harness, args: CommandArgs): Promise<void> {
-  const { command: cmd, client } = args;
-  const arg = cmd.text.trim();
-  let message: string;
-  if (arg === "") {
-    message = `Warden hold threshold: ${getWardenHoldScore()}. ${ADMINS.length > 0 ? "Set with /warden 0.8 (admins only)." : "Set with /warden 0.8 (needs admins in config.yaml)."}`;
-  } else if (!ADMINS.includes(cmd.user_id)) {
-    message = "Only admins (config.yaml admins list) may change the warden threshold.";
-  } else {
-    const value = Number(arg);
-    if (!Number.isFinite(value) || value < 0 || value > 1) {
-      message = "Give a threshold between 0 and 1, e.g. /warden 0.8.";
-    } else {
-      await setWardenHoldScore(harness, value);
-      message = `Warden hold threshold set to ${value} (persisted).`;
-    }
-  }
-  await client.chat.postMessage({ channel: cmd.channel_id, text: message });
-}
-
 /** Build the Slack app and its deps without connecting yet. Listeners are
  * registered here; call `slack.start()` (then setStatus(true)) once startup
  * work that must not race live traffic — the recovery sweep — is done. */
@@ -136,11 +114,6 @@ export async function createSlackApp(
     } catch (error) {
       logger.error(error);
     }
-  });
-
-  // /warden [score]: read the hold threshold; admins set it live, persisted.
-  registerCommand(slack, "/warden", async (args) => {
-    await handleWardenCommand(harness, args);
   });
 
   // /stats: usage and cost totals from the durable records.

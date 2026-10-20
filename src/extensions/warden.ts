@@ -16,11 +16,19 @@
 // classifier and approval gate remain the real defense there).
 import { randomInt } from "node:crypto";
 import { isAbsolute, resolve, sep } from "node:path";
-import type { ClassifierModel, JsonObject } from "@earendil-works/pi-ai";
-import { llamaCppClassifyApi } from "@earendil-works/pi-ai/api/llama-cpp-classify.lazy";
-import { defineDoc, hook, ToolTask, type Extension } from "@earendil-works/pi-durable";
+import type {
+  ClassifierApi,
+  ClassifierContext,
+  ClassifierModel,
+  ClassifierResult,
+  JsonObject,
+  ProviderClassifier,
+} from "@earendil-works/pi-ai";
+import { hook, ToolTask, type Extension } from "@earendil-works/pi-durable";
 import {
+  WARDEN_API_KEY,
   WARDEN_APPROVAL_WINDOW_MS,
+  WARDEN_BACKEND,
   WARDEN_HOLD_SCORE,
   WARDEN_INJECTION_SCORE,
   WARDEN_MODEL,
@@ -28,62 +36,72 @@ import {
 } from "../config.ts";
 import { commandPath } from "../util.ts";
 
-// chisle: session-doc tokens don't infer under tsgolint; structural aliases, as in memory.ts.
-interface SettingsWriter {
-  doc: (token: typeof WardenSettings) => Promise<{ holdScore: number | null }>;
-}
-interface SettingsReader {
-  snapshot: (
-    token: typeof WardenSettings,
-    ctx: unknown,
-  ) => Promise<{ holdScore: number | null } | undefined>;
-}
-
-/** Persisted warden settings, so a live-set hold threshold survives restarts. */
-export const WardenSettings = defineDoc<{ holdScore: number | null }>({
-  kind: "app.warden_settings",
-  version: 1,
-  scope: "session",
-  initial: () => ({ holdScore: null }),
-});
-
-/** Apply a persisted hold threshold (called once at startup). */
-export async function loadPersistedHoldScore(harness: unknown): Promise<void> {
-  const reader = harness as SettingsReader;
-  const persisted = (await reader.snapshot(WardenSettings, undefined))?.holdScore;
-  if (persisted !== null && persisted !== undefined) {
-    holdScore = persisted;
-  }
-}
-
-/** Persist the hold threshold (called by the /warden setter). */
-export async function persistHoldScore(harness: unknown, value: number): Promise<void> {
-  const writer = harness as {
-    commit: (change: (tx: SettingsWriter) => Promise<void>, ctx: unknown) => Promise<unknown>;
-  };
-  await writer.commit(async (tx) => {
-    (await tx.doc(WardenSettings)).holdScore = value;
-  }, undefined);
-}
-
-// Mutable so /warden can adjust the threshold live, without a restart;
-// WARDEN_HOLD_SCORE (config.yaml or env) is the initial value, and a persisted
-// /warden change overrides it across restarts.
-let holdScore = WARDEN_HOLD_SCORE;
-
-/** Risk score at or above which a tool call is held for in-thread approval. */
-export function getWardenHoldScore(): number {
-  return holdScore;
-}
+// --- Classifier backend --------------------------------------------------------
 
 /**
- * Set the hold threshold: persist first, then update the runtime value, so a
- * failed persistence leaves the previous threshold in effect.
+ * The warden's judge: any System One-shaped classifier. One table entry per
+ * backend — the wire `api` the model declares, how its base URL is derived
+ * from the configured one, and a lazy loader for pi-ai's classifier API (so
+ * unused backends are never imported). Adding a backend is one row; nothing
+ * else in the warden knows which one is configured.
  */
-export async function setWardenHoldScore(harness: unknown, value: number): Promise<void> {
-  await persistHoldScore(harness, value);
-  holdScore = value;
+const CLASSIFIER_BACKENDS = {
+  "llama-cpp": {
+    api: "llama-cpp-classify",
+    baseUrl: (url: string) => `${url.replace(/\/+$/u, "")}/v1`,
+    load: () =>
+      import("@earendil-works/pi-ai/api/llama-cpp-classify.lazy").then((m) =>
+        m.llamaCppClassifyApi(),
+      ),
+  },
+  openai: {
+    api: "openai-decisions",
+    baseUrl: (url: string) => url.replace(/\/+$/u, ""),
+    load: () =>
+      import("@earendil-works/pi-ai/api/openai-decisions.lazy").then((m) => m.openAIDecisionsApi()),
+  },
+  jev: {
+    api: "typesafe-system-one",
+    baseUrl: (url: string) => url.replace(/\/+$/u, ""),
+    load: () =>
+      import("@earendil-works/pi-ai/api/typesafe-system-one.lazy").then((m) =>
+        m.typesafeSystemOneApi(),
+      ),
+  },
+} as const satisfies Record<
+  string,
+  { api: string; baseUrl: (url: string) => string; load: () => Promise<ProviderClassifier> }
+>;
+
+const backend = CLASSIFIER_BACKENDS[WARDEN_BACKEND];
+
+const classifierModel: ClassifierModel<ClassifierApi> = {
+  type: "classifier",
+  id: WARDEN_MODEL,
+  name: `warden judge (${WARDEN_BACKEND})`,
+  api: backend.api,
+  provider: "warden",
+  baseUrl: backend.baseUrl(WARDEN_URL),
+  input: ["text"],
+  contextWindow: 32_768,
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+};
+
+let classifier: ProviderClassifier | undefined;
+
+/** Classify through the configured backend; remote backends need an API key. */
+async function classify(context: ClassifierContext): Promise<ClassifierResult> {
+  classifier ??= await backend.load();
+  return classifier.classify(
+    classifierModel,
+    context,
+    WARDEN_API_KEY === undefined ? undefined : { apiKey: WARDEN_API_KEY },
+  );
 }
+
+// The hold threshold is configuration, not runtime state: change
+// warden.hold_score in config.yaml (or WARDEN_HOLD_SCORE) and restart.
+const holdScore = WARDEN_HOLD_SCORE;
 
 // --- Held-call approvals: code-bound, single-use, in-process ---------------
 
@@ -247,26 +265,14 @@ export function obviouslyReadOnly(tool: string, args: JsonObject): boolean {
   return offlineFloors.some((floor) => floor(tool, args) === false);
 }
 
-// --- Classifier -----------------------------------------------------------------
-
-const classifierModel: ClassifierModel<"llama-cpp-classify"> = {
-  type: "classifier",
-  id: WARDEN_MODEL,
-  name: "d3-flash (local llama.cpp)",
-  api: "llama-cpp-classify",
-  provider: "llama-cpp-local",
-  baseUrl: `${WARDEN_URL}/v1`,
-  input: ["text"],
-  contextWindow: 32_768,
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-};
+// --- Classifier scoring ---------------------------------------------------------
 
 async function riskScore(tool: string, args: JsonObject): Promise<number | undefined> {
   try {
     // The classifier sees the command path, not raw argv soup: flag values
     // (--jql, --fields) are query parameters and have misled it before.
     const argv = Array.isArray(args.args) ? args.args.map(String) : [];
-    const result = await llamaCppClassifyApi().classify(classifierModel, {
+    const result = await classify({
       state: {
         tool,
         command: commandPath(argv).join(" "),
@@ -299,7 +305,7 @@ async function riskScore(tool: string, args: JsonObject): Promise<number | undef
 /** Score a tool result for prompt injection steering the agent. */
 async function injectionScore(output: string): Promise<number | undefined> {
   try {
-    const result = await llamaCppClassifyApi().classify(classifierModel, {
+    const result = await classify({
       state: { tool_output: output.slice(0, 8000) },
       questions: {
         injection: {
@@ -377,14 +383,14 @@ const wardenExtension: Extension = {
         const hold =
           score === undefined
             ? offlineWriteShaped(call.name, args) // classifier down: fail closed (unknown tools hold)
-            : score >= getWardenHoldScore();
+            : score >= holdScore;
         if (!hold) {
           return undefined;
         }
         const why =
           score === undefined
             ? "the approval classifier is unreachable and this call looks like a write"
-            : `the approval classifier scored it ${score.toFixed(2)} (hold threshold ${getWardenHoldScore()})`;
+            : `the approval classifier scored it ${score.toFixed(2)} (hold threshold ${holdScore})`;
         const { code } = holdCall(api.conversationId, call.name, args);
         return {
           block:
