@@ -129,6 +129,8 @@ Notes for this bot:
 
 - Emit a blocks array as a fenced block tagged `slack-blocks`. Prose outside the fence is preserved — the bot folds it into the message as section blocks before and after yours (Slack ignores the text field when blocks are present, so everything visible must be a block).
 - Keep ALL user-visible content in the reply: when you use a fence, the approval instructions and any closing notes must be either inside your blocks or in the surrounding prose, never assumed.
+- Keep each block's text under ~2800 characters — split long lists across multiple section blocks. The bot splits oversized blocks and long messages, but a well-sized block reads better.
+- The fence must be valid JSON. Inside JSON strings, never nest double quotes — use single quotes ('Verify ACs') or none; `\"` inside an already-quoted string is the most common failure and the whole card is lost.
 - `header` takes `plain_text`, never `mrkdwn`.
 - `section.fields` renders mrkdwn pairs two-across; use for label/value pairs.
 - `context` holds footnote-level mrkdwn; `divider` separates sparingly.

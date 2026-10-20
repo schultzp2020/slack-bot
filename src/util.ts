@@ -98,10 +98,71 @@ export function extractBlocks(reply: string): {
     if (Array.isArray(parsed)) {
       return { blocks: parsed, before, after };
     }
-  } catch {
-    // fall through: not valid JSON, post as plain text
+  } catch (error) {
+    // Malformed blocks never reach the user as raw JSON: post the prose and
+    // log why the card was lost.
+    console.error("slack-blocks fence failed to parse:", error);
   }
-  return { blocks: [], before: reply, after: "" };
+  return { blocks: [], before, after };
+}
+
+/** Split long text into message-sized chunks at paragraph boundaries. */
+export function chunkText(text: string, max = 3800): string[] {
+  if (text.length <= max) {
+    return [text];
+  }
+  const chunks: string[] = [];
+  let rest = text;
+  while (rest.length > max) {
+    const window = rest.slice(0, max);
+    const cut = Math.max(
+      window.lastIndexOf("\n\n"),
+      window.lastIndexOf("\n"),
+      window.lastIndexOf(" "),
+    );
+    const at = cut > 0 ? cut : max;
+    chunks.push(rest.slice(0, at).trim());
+    rest = rest.slice(at).trim();
+  }
+  if (rest !== "") {
+    chunks.push(rest);
+  }
+  return chunks;
+}
+
+/**
+ * Split a blocks array into message-sized batches: each section's text stays
+ * under Slack's ~3000-character text-object limit (oversized sections are
+ * split into several), and each batch stays under the 50-block message limit.
+ */
+export function splitBlocks(blocks: unknown[], maxText = 2800, maxBlocks = 40): unknown[][] {
+  // First, split any oversized section into several.
+  const expanded: unknown[] = [];
+  for (const block of blocks) {
+    const text =
+      typeof block === "object" &&
+      block !== null &&
+      "text" in block &&
+      typeof (block as { text?: { text?: unknown } }).text?.text === "string"
+        ? (block as { text: { text: string } }).text.text
+        : undefined;
+    if (text === undefined || text.length <= maxText) {
+      expanded.push(block);
+      continue;
+    }
+    for (const part of chunkText(text, maxText)) {
+      expanded.push({
+        ...(block as object),
+        text: { ...(block as { text: object }).text, text: part },
+      });
+    }
+  }
+  // Then batch by the per-message block count.
+  const batches: unknown[][] = [];
+  for (let i = 0; i < expanded.length; i += maxBlocks) {
+    batches.push(expanded.slice(i, i + maxBlocks));
+  }
+  return batches.length > 0 ? batches : [[]];
 }
 
 export interface UserLookup {

@@ -8,11 +8,13 @@ import { markThreadSeen, openThread, threadLastSeenTs } from "./threads.ts";
 import { approvalCode, grantApproval, setTurnRequester } from "./extensions/warden.ts";
 import {
   answerText,
+  chunkText,
   extractBlocks,
   linkifyEmails,
   liveStatusText,
   mentionUsers,
   settledAnswer,
+  splitBlocks,
 } from "./util.ts";
 
 /** The Slack client methods a turn uses. */
@@ -243,30 +245,46 @@ export async function runTurn(deps: TurnDeps, input: TurnInput): Promise<void> {
   // A ```slack-blocks fence in the reply becomes real Block Kit blocks.
   // Slack renders blocks and IGNORES the text field when blocks are present,
   // so the prose around the fence must ride along as section blocks or it is
-  // lost — including approval instructions. The text stays as the fallback
-  // (notifications, and if Slack rejects the blocks). Emails that resolve to
-  // workspace members become @mentions.
+  // lost — including approval instructions. Long replies split into multiple
+  // messages at Slack's limits (text-object ~3000 chars, 50 blocks/message):
+  // the first batch replaces the placeholder, the rest follow in the thread.
+  // Emails that resolve to workspace members become @mentions.
   const { blocks, before, after } = extractBlocks(reply);
-  const fallback = linkifyEmails(
-    `${before}${before !== "" && after !== "" ? "\n\n" : ""}${after}`,
-  ).slice(0, 3900);
+  const mentioned = await mentionUsers(
+    deps.client.users,
+    linkifyEmails(`${before}${before !== "" && after !== "" ? "\n\n" : ""}${after}`),
+  );
   if (blocks.length > 0) {
-    const mentioned = await mentionUsers(deps.client.users, fallback);
     const prose = (text: string) =>
-      text === ""
-        ? []
-        : [{ type: "section", text: { type: "mrkdwn", text: linkifyEmails(text).slice(0, 2900) } }];
+      text === "" ? [] : [{ type: "section", text: { type: "mrkdwn", text } }];
+    const batches = splitBlocks([...prose(before), ...blocks, ...prose(after)]);
     await client.chat
       .update({
         channel: input.channel,
         ts: progressTs,
-        text: mentioned,
-        blocks: [...prose(before), ...blocks, ...prose(after)],
+        text: mentioned.slice(0, 3900),
+        blocks: batches[0],
       })
-      .catch(() => client.chat.update({ channel: input.channel, ts: progressTs, text: mentioned }));
+      .catch(() =>
+        client.chat.update({
+          channel: input.channel,
+          ts: progressTs,
+          text: mentioned.slice(0, 3900),
+        }),
+      );
+    for (const batch of batches.slice(1)) {
+      await client.chat
+        .postMessage({ channel: input.channel, thread_ts: threadTs, text: "", blocks: batch })
+        .catch(() => undefined);
+    }
   } else {
-    const mentioned = await mentionUsers(deps.client.users, fallback);
-    await client.chat.update({ channel: input.channel, ts: progressTs, text: mentioned });
+    const chunks = chunkText(mentioned);
+    await client.chat.update({ channel: input.channel, ts: progressTs, text: chunks[0] });
+    for (const chunk of chunks.slice(1)) {
+      await client.chat
+        .postMessage({ channel: input.channel, thread_ts: threadTs, text: chunk })
+        .catch(() => undefined);
+    }
   }
 
   // Advance the channel watermark to the SOURCE event ts (never the

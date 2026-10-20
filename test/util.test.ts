@@ -326,3 +326,37 @@ describe("extractBlocks", () => {
     expect(extractBlocks("just text")).toEqual({ blocks: [], before: "just text", after: "" });
   });
 });
+
+describe("message splitting", () => {
+  it("chunks long text at paragraph boundaries, never mid-link", async () => {
+    const { chunkText } = await import("../src/util.ts");
+    const para = "word ".repeat(100).trim(); // 500 chars
+    const long = [para, para, para, para, para, para, para, para, para].join("
+
+"); // 4500+
+    const chunks = chunkText(long, 1800);
+    expect(chunks.length).toBeGreaterThan(1);
+    for (const chunk of chunks) {
+      expect(chunk.length).toBeLessThanOrEqual(1800);
+    }
+    expect(chunks.join("\n\n")).toBe(long);
+  });
+
+  it("splits oversized section blocks and batches by block count", async () => {
+    const { splitBlocks } = await import("../src/util.ts");
+    const bigText = "line
+".repeat(700); // 3500 chars
+    const blocks = [{ type: "section", text: { type: "mrkdwn", text: bigText } }];
+    const batches = splitBlocks(blocks, 2800, 40);
+    expect(batches.length).toBe(1);
+    const sections = batches[0] as { text: { text: string } }[];
+    expect(sections.length).toBe(2); // the oversized section split in two
+    for (const s of sections) {
+      expect(s.text.text.length).toBeLessThanOrEqual(2800);
+    }
+    expect(sections.map((s) => s.text.text).join("")).toBe(bigText);
+    // Many blocks batch into several messages.
+    const many = Array.from({ length: 90 }, (_, i) => ({ type: "section", text: { type: "mrkdwn", text: `b${i}` } }));
+    expect(splitBlocks(many, 2800, 40).length).toBe(3);
+  });
+});
